@@ -1,0 +1,28 @@
+identifier: asynthosc
+name: Asynthosc
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+  - xtools
+ram: 1024
+flash: 2048
+supported:
+  - uart
+  - gpio
+  - counter
+  - i2c
+  - pwm
+  - adc
+  - netif:eth
+  - spi
+  - backup_sram
+  - watchdog
+  - usb_device
+  - can
+  - dac
+  - dma
+  - rtc
+  - usbd
+vendor: rederotech

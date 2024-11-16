@@ -1,0 +1,280 @@
+/*
+ * Copyright (c) 2024 RederoTech
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+#include <st/h7/stm32h743Xi.dtsi>
+#include <st/h7/stm32h743vitx-pinctrl.dtsi>
+//#include "arduino_r3_connector.dtsi"
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	model = "RederoTech AsynthOsc board";
+	compatible = "rederotech,asynthosc";
+
+	chosen {
+		zephyr,console = &usart2;
+		zephyr,shell-uart = &usart2;
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+		zephyr,dtcm = &dtcm;
+		zephyr,code-partition = &slot0_partition;
+//		zephyr,canbus = &fdcan1;
+	};
+
+	leds: leds {
+		compatible = "gpio-leds";
+		debug_led: led_0 {
+			gpios = <&gpioc 2 GPIO_ACTIVE_LOW>;
+			label = "Debug LD0";
+		};
+		button1_led: led_1 {
+			gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
+			label = "Button 1 LD1";
+		};
+		button2_led: led_2 {
+			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
+			label = "Button 2 LD2";
+		};
+	};
+
+	gpio_keys {
+		compatible = "gpio-keys";
+		left_button: button_0 {
+			label = "User";
+			gpios = <&gpiod 2 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		right_button: button_1 {
+			label = "User";
+			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+	};
+
+	aliases {
+		led0 = &debug_led;
+		led1 = &button1_led;
+		sw0 = &left_button;
+		watchdog0 = &iwdg;
+		die-temp0 = &die_temp;
+		volt-sensor0 = &vref;
+		volt-sensor1 = &vbat;
+	};
+};
+
+&clk_lsi {
+	status = "okay";
+};
+
+&clk_hsi48 {
+	status = "okay";
+};
+
+&clk_hse {
+	hse-bypass;
+	clock-frequency = <DT_FREQ_M(8)>; /* STLink 8MHz clock */
+	status = "okay";
+};
+
+&pll {
+	div-m = <2>;
+	mul-n = <240>;
+	div-p = <2>;
+	div-q = <2>;
+	div-r = <2>;
+	clocks = <&clk_hse>;
+	status = "okay";
+};
+
+&pll2 {
+	div-m = <4>;
+	mul-n = <120>;
+	div-p = <2>;
+	div-q = <3>; /* gives 80MHz to the FDCAN */
+	div-r = <2>;
+	clocks = <&clk_hse>;
+	status = "okay";
+};
+
+&rcc {
+	clocks = <&pll>;
+	clock-frequency = <DT_FREQ_M(480)>;
+	d1cpre = <1>;
+	hpre = <2>;
+	d1ppre = <2>;
+	d2ppre1 = <2>;
+	d2ppre2 = <2>;
+	d3ppre = <2>;
+};
+
+&usart2 {
+	pinctrl-0 = <&usart2_tx_pd5 &usart2_rx_pd6>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
+midi: &uart4 {
+	pinctrl-0 = <&uart4_tx_pd1 &uart4_rx_pd0>;
+	pinctrl-names = "default";
+	current-speed = <31250>;
+	status = "okay";
+};
+
+zephyr_udc0: &usbotg_fs {
+	pinctrl-0 = <&usb_otg_fs_dm_pa11 &usb_otg_fs_dp_pa12>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&rtc {
+	clocks = <&rcc STM32_CLOCK_BUS_APB4 0x00010000>,
+		 <&rcc STM32_SRC_LSI RTC_SEL(2)>;
+	status = "okay";
+};
+
+&i2c1 {
+	pinctrl-0 = <&i2c1_scl_pb8 &i2c1_sda_pb9>;
+	pinctrl-names = "default";
+	status = "disabled";
+	clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+&timers12 {
+	st,prescaler = <10000>;
+	status = "okay";
+
+	pwm12: pwm {
+		status = "disabled";
+		pinctrl-0 = <&tim12_ch1_pb14>;
+		pinctrl-names = "default";
+	};
+};
+
+&adc1 {
+	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
+	pinctrl-names = "default";
+	st,adc-clock-source = <SYNC>;
+	st,adc-prescaler = <4>;
+	status = "okay";
+};
+
+&die_temp {
+	status = "okay";
+};
+
+&dac1 {
+	status = "okay";
+	pinctrl-0 = <&dac1_out1_pa4>;
+	pinctrl-names = "default";
+};
+
+&rng {
+	status = "okay";
+};
+
+&fdcan1 {
+	pinctrl-0 = <&fdcan1_rx_pd0 &fdcan1_tx_pd1>;
+	pinctrl-names = "default";
+	clocks = <&rcc STM32_CLOCK_BUS_APB1_2 0x00000100>,
+		 <&rcc STM32_SRC_PLL2_Q FDCAN_SEL(2)>;
+	status = "disabled";
+};
+
+/*
+ * WARNING:
+ * Possible pin conflicts:
+ *          The pins PA2 and PB13 may conflict on selection of ETH_STM32_HAL,
+ *          since they are used in ST Zio or ST morpho connectors.
+ *          To avoid conflicting states the jumpers JP6 and JP7
+ *          must be in ON state.
+ */
+&mac {
+	status = "okay";
+	pinctrl-0 = <&eth_rxd0_pc4
+		     &eth_rxd1_pc5
+		     &eth_ref_clk_pa1
+		     &eth_crs_dv_pa7
+		     &eth_tx_en_pb11
+		     &eth_txd0_pb12
+		     &eth_txd1_pb13>;
+	pinctrl-names = "default";
+};
+
+&mdio {
+	status = "okay";
+	pinctrl-0 = <&eth_mdio_pa2 &eth_mdc_pc1>;
+	pinctrl-names = "default";
+
+	ethernet-phy@0 {
+		compatible = "ethernet-phy";
+		reg = <0x00>;
+		status = "okay";
+	};
+};
+
+&spi2 {
+	status = "okay";
+	pinctrl-0 = <&spi2_sck_pb10 &spi2_miso_pb14 &spi2_mosi_pb15>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpioc 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+};
+
+&backup_sram {
+	status = "okay";
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* 128KB for bootloader */
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(128)>;
+			read-only;
+		};
+
+		/* storage: 128KB for settings */
+		storage_partition: partition@20000 {
+			label = "storage";
+			reg = <0x00020000 DT_SIZE_K(128)>;
+		};
+
+		/* application image slot: 256KB */
+		slot0_partition: partition@40000 {
+			label = "image-0";
+			reg = <0x00040000 DT_SIZE_K(256)>;
+		};
+
+		/* backup slot: 256KB */
+		slot1_partition: partition@80000 {
+			label = "image-1";
+			reg = <0x00080000 DT_SIZE_K(256)>;
+		};
+
+		/* swap slot: 128KB */
+		scratch_partition: partition@c0000 {
+			label = "image-scratch";
+			reg = <0x000c0000 DT_SIZE_K(128)>;
+		};
+
+	};
+};
+
+&iwdg1 {
+	status = "okay";
+};
+
+&vref {
+	status = "okay";
+};
+
+&vbat {
+	status = "okay";
+};
