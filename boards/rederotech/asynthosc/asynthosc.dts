@@ -156,6 +156,11 @@ zephyr_udc0: &usbotg_fs {
 
 };
 
+&timers1 {
+    status = "okay";
+    //pinctrl-0 = <&tim1_ch3_pe13 &tim1_ch4_pe14>;
+};
+
 &adc1 {
 	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
 	pinctrl-names = "default";
