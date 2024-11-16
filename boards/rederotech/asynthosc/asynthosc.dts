@@ -62,6 +62,7 @@
 		die-temp0 = &die_temp;
 		volt-sensor0 = &vref;
 		volt-sensor1 = &vbat;
+                qdec0 = &qdec;
 	};
 };
 
@@ -154,6 +155,20 @@ zephyr_udc0: &usbotg_fs {
 	};
 };
 
+&timers3 {
+    status = "okay";
+
+    qdec: qdec {
+        status = "disabled";
+        pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
+        pinctrl-names = "default";
+        st,input-polarity-inverted;
+    //    st,input-filter-level = <FDIV32_N8>;
+        st,counts-per-revolution = <16>;
+    };
+
+};
+
 &adc1 {
 	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
 	pinctrl-names = "default";
@@ -239,6 +254,24 @@ zephyr_udc0: &usbotg_fs {
                 data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
                 reset-gpios = <&gpioc 6 GPIO_ACTIVE_HIGH>;
                 spi-max-frequency = <4000000>;
+	};
+};
+
+&quadspi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&quadspi_clk_pb2 &quadspi_bk1_ncs_pb6
+		&quadspi_bk1_io0_pc9 &quadspi_bk1_io1_pc10
+		&quadspi_bk1_io2_pe2 &quadspi_bk1_io3_pd13>;
+	flash-id = <1>;
+	status = "okay";
+
+	w25q32jvss: qspi-nor-flash@90000000 {
+		compatible = "st,stm32-qspi-nor";
+		reg = <0x90000000 DT_SIZE_M(4)>; /* 32 Mbits */
+		qspi-max-frequency = <8000000>;
+		status = "okay";
+		spi-bus-width = <4>;
+		writeoc = "PP_1_4_4";
 	};
 };
 

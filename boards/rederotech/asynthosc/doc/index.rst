@@ -19,7 +19,7 @@ Key Features
 - STM32H743 microcontroller in LQFP100 package
 - Ethernet compliant with IEEE-802.3-2002 (depending on STM32 support)
 - USB OTG or full-speed device (depending on STM32 support)
-- Central rotary encoder with pushbutton
+- Central rotary quadrature encoder with pushbutton
 - 4 arcade-like pushbuttons with retrolights
 - 8 mini-jack inputs, 12V or 5V tolerant
 - 128x64 OLED display
@@ -62,7 +62,9 @@ Board is configured as follows:
 - UART4 RX MIDI in: PD0
 - Buttons 1, 2 inputs: PD2, PD12
 - Button 1, 2 LEDs: PD3, PD11
-- Rotary encoder A, B: PD14, PC8
+- Rotary encoder A, B: PD14 (TIM4_CH3), PC8 (TIM3_CH3, TIM8_CH3): Issue
+ 90: TIM3 CH1 (remove nRST jumper and solder to ROT B)
+ 91: TIM3 CH2 is FREE, can also be exchanged with 90 to ease routing
 - Rotary encoder pushbutton: PA8
 - Display power enable: PD9 (from 5V)
 - Display SPI2 MOSI, MISO, SCK, nCS: PB15, PB14, PB10, PC7
