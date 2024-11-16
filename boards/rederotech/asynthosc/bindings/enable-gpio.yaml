@@ -1,0 +1,7 @@
+compatible: "enable-gpio"
+properties:
+  gpios:
+    type: phandle-array
+    required: true
+    description: |
+      The GPIO to enable or disable a chip or a power supply.

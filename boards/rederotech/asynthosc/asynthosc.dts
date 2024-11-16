@@ -7,7 +7,6 @@
 /dts-v1/;
 #include <st/h7/stm32h743Xi.dtsi>
 #include <st/h7/stm32h743vitx-pinctrl.dtsi>
-//#include "arduino_r3_connector.dtsi"
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 
 / {
@@ -22,6 +21,7 @@
 		zephyr,dtcm = &dtcm;
 		zephyr,code-partition = &slot0_partition;
 		zephyr,display = &ssd1306;
+                zephyr,flash-controller = &w25q32jvss;
 	};
 
 	leds: leds {
@@ -39,6 +39,11 @@
 			label = "Button 2 LD2";
 		};
 	};
+
+        enable_display: enable_display {
+            compatible = "enable-gpio";
+            gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
+        };
 
 	gpio_keys {
 		compatible = "gpio-keys";
@@ -137,24 +142,6 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 };
 
-&i2c1 {
-	pinctrl-0 = <&i2c1_scl_pb8 &i2c1_sda_pb9>;
-	pinctrl-names = "default";
-	status = "disabled";
-	clock-frequency = <I2C_BITRATE_FAST>;
-};
-
-&timers12 {
-	st,prescaler = <10000>;
-	status = "okay";
-
-	pwm12: pwm {
-		status = "disabled";
-		pinctrl-0 = <&tim12_ch1_pb14>;
-		pinctrl-names = "default";
-	};
-};
-
 &timers3 {
     status = "okay";
 
@@ -191,22 +178,6 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 };
 
-&fdcan1 {
-	pinctrl-0 = <&fdcan1_rx_pd0 &fdcan1_tx_pd1>;
-	pinctrl-names = "default";
-	clocks = <&rcc STM32_CLOCK_BUS_APB1_2 0x00000100>,
-		 <&rcc STM32_SRC_PLL2_Q FDCAN_SEL(2)>;
-	status = "disabled";
-};
-
-/*
- * WARNING:
- * Possible pin conflicts:
- *          The pins PA2 and PB13 may conflict on selection of ETH_STM32_HAL,
- *          since they are used in ST Zio or ST morpho connectors.
- *          To avoid conflicting states the jumpers JP6 and JP7
- *          must be in ON state.
- */
 &mac {
 	status = "okay";
 	pinctrl-0 = <&eth_rxd0_pc4
