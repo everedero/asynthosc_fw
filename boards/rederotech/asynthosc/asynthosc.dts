@@ -21,7 +21,7 @@
 		zephyr,flash = &flash0;
 		zephyr,dtcm = &dtcm;
 		zephyr,code-partition = &slot0_partition;
-//		zephyr,canbus = &fdcan1;
+		zephyr,display = &ssd1306;
 	};
 
 	leds: leds {
@@ -221,6 +221,25 @@ zephyr_udc0: &usbotg_fs {
 	pinctrl-0 = <&spi2_sck_pb10 &spi2_miso_pb14 &spi2_mosi_pb15>;
 	pinctrl-names = "default";
 	cs-gpios = <&gpioc 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+	ssd1306: ssd1306@0 {
+		compatible = "solomon,ssd1306fb";
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		com-sequential;
+		prechargep = <0x22>;
+		inversion-on;
+		reg = <0>;
+                data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
+                reset-gpios = <&gpioc 6 GPIO_ACTIVE_HIGH>;
+                spi-max-frequency = <4000000>;
+	};
 };
 
 &backup_sram {
