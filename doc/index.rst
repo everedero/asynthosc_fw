@@ -1,7 +1,7 @@
-Welcome to Example Application's documentation!
+Welcome to Asynthosc Application's documentation!
 ===============================================
 
-This is a simple Sphinx documentation setup for ``example-application``.
+This is a simple Sphinx documentation setup for ``asynthosc-application``.
 
 .. toctree::
    :maxdepth: 2
