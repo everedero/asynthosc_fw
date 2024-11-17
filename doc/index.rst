@@ -1,5 +1,5 @@
 Welcome to Asynthosc Application's documentation!
-===============================================
+=================================================
 
 This is a simple Sphinx documentation setup for ``asynthosc-application``.
 
