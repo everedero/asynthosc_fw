@@ -1,8 +1,8 @@
 common:
   tags: extensibility
   integration_platforms:
-    - custom_plank
     - qemu_cortex_m0
+    - asynthosc
 tests:
   lib.custom: {}
   lib.custom.non_default:
