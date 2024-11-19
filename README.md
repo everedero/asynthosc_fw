@@ -23,7 +23,7 @@ command:
 
 ```shell
 # initialize my-workspace for the asynthosc-application (main branch)
-west init -m https://github.com/zephyrproject-rtos/asynthosc-application --mr main my-workspace
+west init -m https://github.com/everedero/asynthosc_fw --mr main my-workspace
 # update Zephyr modules
 cd my-workspace
 west update
