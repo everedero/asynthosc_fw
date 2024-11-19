@@ -34,14 +34,9 @@ west update
 To build the application, run the following command:
 
 ```shell
-cd asynthosc-application
-west build -b $BOARD app
-```
-
-where `$BOARD` is the target board.
-
-```shell
+cd asynthosc-fw
 BOARD=asynthosc
+west build -b $BOARD app
 ```
 
 You can use the `asynthosc` board found in this
