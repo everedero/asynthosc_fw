@@ -31,7 +31,7 @@
 			label = "Debug LD0";
 		};
 		button1_led: led_1 {
-			gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
+			gpios = <&gpiod 2 GPIO_ACTIVE_LOW>;
 			label = "Button 1 LD1";
 		};
 		button2_led: led_2 {
@@ -49,12 +49,12 @@
 		compatible = "gpio-keys";
 		left_button: button_0 {
 			label = "User";
-			gpios = <&gpiod 2 GPIO_ACTIVE_LOW>;
+			gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_0>;
 		};
 		right_button: button_1 {
 			label = "User";
-			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
+			gpios = <&gpiod 12 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_1>;
 		};
 	};
