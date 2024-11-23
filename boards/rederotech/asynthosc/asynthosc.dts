@@ -246,7 +246,8 @@ zephyr_udc0: &usbotg_fs {
 		qspi-max-frequency = <8000000>;
 		status = "okay";
 		spi-bus-width = <4>;
-		writeoc = "PP_1_4_4";
+                reset-cmd;
+		writeoc = "PP_1_1_4";
 	};
 };
 
