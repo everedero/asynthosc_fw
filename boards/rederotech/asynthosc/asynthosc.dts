@@ -38,12 +38,15 @@
 			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
 			label = "Button 2 LD2";
 		};
-	};
-
         enable_display: enable_display {
-            compatible = "enable-gpio";
             gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
         };
+	};
+
+        /*enable_display: enable_display {
+            compatible = "enable-gpio";
+            gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
+        };*/
 
 	gpio_keys {
 		compatible = "gpio-keys";
@@ -68,6 +71,7 @@
 		volt-sensor0 = &vref;
 		volt-sensor1 = &vbat;
                 qdec0 = &qdec;
+		enabledisp = &enable_display;
 	};
 };
 
@@ -182,9 +186,12 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 };
 
-&mac {
+&mac { //stm32-ethernet // mdio is a child
 	status = "okay";
-	pinctrl-0 = <&eth_rxd0_pc4
+	phy-connection-type = "rmii";
+	pinctrl-0 = </*&eth_mdc_pc1
+		     &eth_mdio_pa2*/
+		     &eth_rxd0_pc4
 		     &eth_rxd1_pc5
 		     &eth_ref_clk_pa1
 		     &eth_crs_dv_pa7
@@ -192,6 +199,8 @@ zephyr_udc0: &usbotg_fs {
 		     &eth_txd0_pb12
 		     &eth_txd1_pb13>;
 	pinctrl-names = "default";
+	local-mac-address = [00 00 00 77 77 77];
+	//ref-clk-output-gpios = <&gpioa 1 GPIO_ACTIVE_HIGH>;
 };
 
 &mdio {
@@ -199,21 +208,26 @@ zephyr_udc0: &usbotg_fs {
 	pinctrl-0 = <&eth_mdio_pa2 &eth_mdc_pc1>;
 	pinctrl-names = "default";
 
-	ethernet-phy@0 {
+	ethernetphy: ethernet-phy@0 {
 		compatible = "ethernet-phy";
+		//ID = <0x07C130>;
 		reg = <0x00>;
 		status = "okay";
+		no-reset;
+		// LAN8742A in mode 111: negociation enabled, don’t use fixed-link
 	};
 };
 
 &spi2 {
 	status = "okay";
-	pinctrl-0 = <&spi2_sck_pb10 &spi2_miso_pb14 &spi2_mosi_pb15>;
+	pinctrl-0 = <&spi2_sck_pb10 &spi2_mosi_pb15>;
 	pinctrl-names = "default";
-	cs-gpios = <&gpioc 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	cs-gpios = <&gpioc 7 (GPIO_ACTIVE_LOW | GPIO_PULL_DOWN)>;
+	//cs-gpios = <&gpioc 7 (GPIO_ACTIVE_HIGH)>;
 
 	ssd1306: ssd1306@0 {
-		compatible = "solomon,ssd1306fb";
+		//compatible = "solomon,ssd1306fb";
+		compatible = "sinowealth,sh1106";
 		width = <128>;
 		height = <64>;
 		segment-offset = <0>;
@@ -226,9 +240,10 @@ zephyr_udc0: &usbotg_fs {
 		prechargep = <0x22>;
 		inversion-on;
 		reg = <0>;
-                data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
-                reset-gpios = <&gpioc 6 GPIO_ACTIVE_HIGH>;
-                spi-max-frequency = <4000000>;
+        	data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
+        	reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
+        	//spi-max-frequency = <DT_FREQ_M(4)>;
+        	spi-max-frequency = <DT_FREQ_M(2)>;
 	};
 };
 
