@@ -186,12 +186,10 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 };
 
-&mac { //stm32-ethernet // mdio is a child
+&mac { //stm32-ethernet
 	status = "okay";
 	phy-connection-type = "rmii";
-	pinctrl-0 = </*&eth_mdc_pc1
-		     &eth_mdio_pa2*/
-		     &eth_rxd0_pc4
+	pinctrl-0 = <&eth_rxd0_pc4
 		     &eth_rxd1_pc5
 		     &eth_ref_clk_pa1
 		     &eth_crs_dv_pa7
@@ -200,21 +198,20 @@ zephyr_udc0: &usbotg_fs {
 		     &eth_txd1_pb13>;
 	pinctrl-names = "default";
 	local-mac-address = [00 00 00 77 77 77];
-	//ref-clk-output-gpios = <&gpioa 1 GPIO_ACTIVE_HIGH>;
 };
 
-&mdio {
+&mdio { //mdio is a child of &mac
 	status = "okay";
 	pinctrl-0 = <&eth_mdio_pa2 &eth_mdc_pc1>;
 	pinctrl-names = "default";
 
 	ethernetphy: ethernet-phy@0 {
 		compatible = "ethernet-phy";
-		//ID = <0x07C130>;
-		reg = <0x00>;
+		reg = <0x10>;
 		status = "okay";
 		no-reset;
 		// LAN8742A in mode 111: negociation enabled, don’t use fixed-link
+		//ID = <0x07C130>;
 	};
 };
 
