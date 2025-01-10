@@ -8,6 +8,7 @@
 #include <st/h7/stm32h743Xi.dtsi>
 #include <st/h7/stm32h743vitx-pinctrl.dtsi>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/spi/spi.h>
 
 / {
 	model = "RederoTech AsynthOsc board";
@@ -21,7 +22,7 @@
 		zephyr,dtcm = &dtcm;
 		zephyr,code-partition = &slot0_partition;
 		zephyr,display = &ssd1306;
-                zephyr,flash-controller = &w25q32jvss;
+		zephyr,flash-controller = &w25q32jvss;
 	};
 
 	leds: leds {
@@ -38,15 +39,15 @@
 			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
 			label = "Button 2 LD2";
 		};
-        enable_display: enable_display {
-            gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
-        };
+		enable_display: enable_display {
+			gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
+		};
 	};
 
-        /*enable_display: enable_display {
-            compatible = "enable-gpio";
-            gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
-        };*/
+		/*enable_display: enable_display {
+			compatible = "enable-gpio";
+			gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
+		};*/
 
 	gpio_keys {
 		compatible = "gpio-keys";
@@ -70,8 +71,8 @@
 		die-temp0 = &die_temp;
 		volt-sensor0 = &vref;
 		volt-sensor1 = &vbat;
-                qdec0 = &qdec;
-		enabledisp = &enable_display;
+		qdec0 = &qdec;
+	//	enabledisp = &enable_display;
 	};
 };
 
@@ -146,22 +147,22 @@ zephyr_udc0: &usbotg_fs {
 };
 
 &timers3 {
-    status = "okay";
+	status = "okay";
 
-    qdec: qdec {
-        status = "disabled";
-        pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
-        pinctrl-names = "default";
-        st,input-polarity-inverted;
-    //    st,input-filter-level = <FDIV32_N8>;
-        st,counts-per-revolution = <16>;
-    };
+	qdec: qdec {
+		status = "disabled";
+		pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
+		pinctrl-names = "default";
+		st,input-polarity-inverted;
+	//	st,input-filter-level = <FDIV32_N8>;
+		st,counts-per-revolution = <16>;
+	};
 
 };
 
 &timers1 {
-    status = "okay";
-    //pinctrl-0 = <&tim1_ch3_pe13 &tim1_ch4_pe14>;
+	status = "okay";
+	//pinctrl-0 = <&tim1_ch3_pe13 &tim1_ch4_pe14>;
 };
 
 &adc1 {
@@ -190,12 +191,12 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 	phy-connection-type = "rmii";
 	pinctrl-0 = <&eth_rxd0_pc4
-		     &eth_rxd1_pc5
-		     &eth_ref_clk_pa1
-		     &eth_crs_dv_pa7
-		     &eth_tx_en_pb11
-		     &eth_txd0_pb12
-		     &eth_txd1_pb13>;
+			 &eth_rxd1_pc5
+			 &eth_ref_clk_pa1
+			 &eth_crs_dv_pa7
+			 &eth_tx_en_pb11
+			 &eth_txd0_pb12
+			 &eth_txd1_pb13>;
 	pinctrl-names = "default";
 	local-mac-address = [00 00 00 77 77 77];
 };
@@ -207,9 +208,9 @@ zephyr_udc0: &usbotg_fs {
 
 	ethernetphy: ethernet-phy@0 {
 		compatible = "ethernet-phy";
-		reg = <0x10>;
+		reg = <0x0>;
 		status = "okay";
-		no-reset;
+		//no-reset;
 		// LAN8742A in mode 111: negociation enabled, don’t use fixed-link
 		//ID = <0x07C130>;
 	};
@@ -223,8 +224,9 @@ zephyr_udc0: &usbotg_fs {
 	//cs-gpios = <&gpioc 7 (GPIO_ACTIVE_HIGH)>;
 
 	ssd1306: ssd1306@0 {
-		//compatible = "solomon,ssd1306fb";
-		compatible = "sinowealth,sh1106";
+		compatible = "solomon,ssd1306fb";
+		//compatible = "sinowealth,sh1106";
+		duplex = <SPI_FULL_DUPLEX>;
 		width = <128>;
 		height = <64>;
 		segment-offset = <0>;
@@ -233,14 +235,15 @@ zephyr_udc0: &usbotg_fs {
 		multiplex-ratio = <63>;
 		segment-remap;
 		com-invdir;
-		com-sequential;
-		prechargep = <0x22>;
-		inversion-on;
+		//prechargep = <0x22>;
+		prechargep = <0xf1>;
+		//inversion-on;
 		reg = <0>;
-        	data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
-        	reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
-        	//spi-max-frequency = <DT_FREQ_M(4)>;
-        	spi-max-frequency = <DT_FREQ_M(2)>;
+		data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
+		supply-gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
+		//spi-max-frequency = <DT_FREQ_M(4)>;
+		spi-max-frequency = <1875000>;
 	};
 };
 
@@ -258,7 +261,7 @@ zephyr_udc0: &usbotg_fs {
 		qspi-max-frequency = <8000000>;
 		status = "okay";
 		spi-bus-width = <4>;
-                reset-cmd;
+		reset-cmd;
 		writeoc = "PP_1_1_4";
 	};
 };
