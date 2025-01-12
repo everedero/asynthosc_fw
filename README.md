@@ -105,5 +105,8 @@ other output formats other than HTML by running ``make help``.
 * Enable 10V: OK
 * USB data: OK, make markings for equipment
 * QSPI flash: OK
-* MDIO bus / RMII / Ethernet: KO, bad rotation
-* Display: Maybe KO
+* MDIO bus / RMII / Ethernet: KO, wrong ldo retroalim
+* Display: OK, verify grey lines, maybe voltage bias issue
+* DAC: TBD
+* Analog: TBD
+* MIDI: TBD
