@@ -224,7 +224,6 @@ zephyr_udc0: &usbotg_fs {
 	//cs-gpios = <&gpioc 7 (GPIO_ACTIVE_HIGH)>;
 
 	ssd1306: ssd1306@0 {
-		//compatible = "solomon,ssd1306fb";
 		compatible = "sinowealth,sh1106";
 		duplex = <SPI_FULL_DUPLEX>;
 		width = <128>;
@@ -235,9 +234,7 @@ zephyr_udc0: &usbotg_fs {
 		multiplex-ratio = <63>;
 		segment-remap;
 		com-invdir;
-		//prechargep = <0x22>;
 		prechargep = <0xf1>;
-		//inversion-on;
 		reg = <0>;
 		data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
