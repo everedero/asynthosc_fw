@@ -239,8 +239,8 @@ zephyr_udc0: &usbotg_fs {
 		data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
 		supply-gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
-		//spi-max-frequency = <DT_FREQ_M(4)>;
-		spi-max-frequency = <1875000>;
+		spi-max-frequency = <DT_FREQ_M(4)>;
+		//spi-max-frequency = <1875000>;
 	};
 };
 
