@@ -1,0 +1,63 @@
+/*
+ * Copyright (c) 2024, Eve Redero
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/lvgl/lvgl.h>
+
+/ {
+	gpio_keys {
+		compatible = "gpio-keys";
+		left_button: button_0 {
+			label = "User";
+			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		right_button: button_1 {
+			label = "User";
+			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+	};
+	leds {
+		debug_led: led_0 {
+			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+			label = "Debug LD0";
+		};
+		button1_led: led_1 {
+			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+			label = "Button 1 LD1";
+		};
+		button2_led: led_2 {
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+			label = "Button 2 LD2";
+		};
+		enable_display: enable_display {
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+
+&gpio0 {
+	ngpios = <7>;
+
+	sdl_gpio {
+		status = "okay";
+		compatible = "zephyr,gpio-emul-sdl";
+		/* Scancodes correspond to USB HID decimal codes */
+		/* not the usual AT-101 input codes. */
+		/* Here, we map Space, Enter, Left, Right, Up and Down */
+		/* from HID keybord to GPIO0 1 to 6 */
+		scancodes = <44 40 1 2 3 4 5>;
+	};
+};
+
+&sdl_dc {
+        compatible = "zephyr,sdl-dc";
+	status = "okay";
+        height = <64>;
+        width = <128>;
+};
