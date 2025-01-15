@@ -56,6 +56,18 @@ Once you have built the application, run the following command to flash it:
 west flash
 ```
 
+### Emulation
+
+```shell
+west build -b native_sim/native/64 app -- -DEXTRA_CONF_FILE=debug.conf
+```
+
+Then, execute:
+
+```shell
+./build/zephyr/zephyr.exe -display_zoom_pct=200
+```
+
 ### Testing
 
 To execute Twister integration tests, run the following command:
