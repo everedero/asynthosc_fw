@@ -221,7 +221,6 @@ zephyr_udc0: &usbotg_fs {
 	pinctrl-0 = <&spi2_sck_pb10 &spi2_mosi_pb15>;
 	pinctrl-names = "default";
 	cs-gpios = <&gpioc 7 (GPIO_ACTIVE_LOW | GPIO_PULL_DOWN)>;
-	//cs-gpios = <&gpioc 7 (GPIO_ACTIVE_HIGH)>;
 
 	ssd1306: ssd1306@0 {
 		compatible = "sinowealth,sh1106";
@@ -240,7 +239,6 @@ zephyr_udc0: &usbotg_fs {
 		reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
 		supply-gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
 		spi-max-frequency = <DT_FREQ_M(4)>;
-		//spi-max-frequency = <1875000>;
 	};
 };
 
