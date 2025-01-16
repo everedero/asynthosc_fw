@@ -168,7 +168,7 @@ zephyr_udc0: &usbotg_fs {
 &adc1 {
 	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
 	pinctrl-names = "default";
-	st,adc-clock-source = <SYNC>;
+	st,adc-clock-source = "SYNC";
 	st,adc-prescaler = <4>;
 	status = "okay";
 };
@@ -235,7 +235,7 @@ zephyr_udc0: &usbotg_fs {
 		com-invdir;
 		prechargep = <0xf1>;
 		reg = <0>;
-		data_cmd-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
+		data-cmd-gpios = <&gpiod 15 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&gpioc 6 GPIO_ACTIVE_LOW>;
 		supply-gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
 		spi-max-frequency = <DT_FREQ_M(4)>;
