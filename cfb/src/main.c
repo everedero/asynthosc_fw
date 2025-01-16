@@ -9,9 +9,6 @@
 #include <zephyr/display/cfb.h>
 #include <zephyr/drivers/gpio.h>
 #include <stdio.h>
-#define DISP_NODE DT_NODELABEL(enable_display)
-
-static const struct gpio_dt_spec disp_enable = GPIO_DT_SPEC_GET(DISP_NODE, gpios);
 
 int main(void)
 {
@@ -23,20 +20,6 @@ int main(void)
 	uint8_t font_width;
 	uint8_t font_height;
 	int ret;
-
-	if (!gpio_is_ready_dt(&disp_enable)) {
-		return 0;
-	}
-
-	ret = gpio_pin_configure_dt(&disp_enable, GPIO_OUTPUT_ACTIVE);
-	if (ret < 0) {
-		return 0;
-	}
-
-	ret = gpio_pin_set_dt(&disp_enable, 1);
-	if (ret < 0) {
-		return 0;
-	}
 
 	dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 	if (!device_is_ready(dev)) {
@@ -93,22 +76,9 @@ int main(void)
 	cfb_invert_area(dev, 0, 18*2, 128, 18*3);
 	cfb_framebuffer_finalize(dev);
 
-/*
-	while (1) {
-		for (int i = 0; i < MIN(x_res, y_res); i++) {
-			cfb_framebuffer_clear(dev, false);
-			if (cfb_print(dev,
-				      "Welcome to RederoTech\nYo",
-				      i, i)) {
-				printf("Failed to print a string\n");
-				continue;
-			}
-
-			cfb_framebuffer_finalize(dev);
-#if defined(CONFIG_ARCH_POSIX)
-			k_sleep(K_MSEC(50));
-#endif
-		}
-	}*/
+	k_sleep(K_MSEC(2000));
+	display_blanking_on(dev);
+	k_sleep(K_MSEC(2000));
+	display_blanking_off(dev);
 	return 0;
 }
