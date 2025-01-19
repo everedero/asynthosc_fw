@@ -20,29 +20,31 @@
 			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_1>;
 		};
+		rot_button: button_2 {
+			label = "User";
+			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
 	};
 	leds {
 		debug_led: led_0 {
-			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
 			label = "Debug LD0";
 		};
 		button1_led: led_1 {
-			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
 			label = "Button 1 LD1";
 		};
 		button2_led: led_2 {
-			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
 			label = "Button 2 LD2";
-		};
-		enable_display: enable_display {
-			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
 		};
 	};
 };
 
 
 &gpio0 {
-	ngpios = <7>;
+	ngpios = <6>;
 
 	sdl_gpio {
 		status = "okay";
@@ -51,7 +53,7 @@
 		/* not the usual AT-101 input codes. */
 		/* Here, we map Space, Enter, Left, Right, Up and Down */
 		/* from HID keybord to GPIO0 1 to 6 */
-		scancodes = <44 40 1 2 3 4 5>;
+		scancodes = <44 40 1 2 3 4>;
 	};
 };
 

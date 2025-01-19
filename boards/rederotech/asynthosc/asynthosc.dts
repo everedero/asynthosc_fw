@@ -53,6 +53,11 @@
 			gpios = <&gpiod 12 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_1>;
 		};
+		rot_button: button_2 {
+			label = "User";
+			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
 	};
 
 	aliases {
@@ -64,7 +69,6 @@
 		volt-sensor0 = &vref;
 		volt-sensor1 = &vbat;
 		qdec0 = &qdec;
-	//	enabledisp = &enable_display;
 	};
 };
 
