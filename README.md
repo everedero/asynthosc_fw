@@ -58,6 +58,10 @@ west flash
 
 ### Emulation
 
+This project supports emulation.
+Left and right pushbuttons are emulated by keyboard left and right.
+Rotary encoder click is by keyboard enter.
+
 ```shell
 west build -b native_sim/native/64 app -- -DEXTRA_CONF_FILE=debug.conf
 ```
@@ -122,3 +126,5 @@ other output formats other than HTML by running ``make help``.
 * DAC: TBD
 * Analog: TBD
 * MIDI: TBD
+* Supply: TBD
+* Board does not start without probe
