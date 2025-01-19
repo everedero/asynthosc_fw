@@ -31,11 +31,11 @@
 			gpios = <&gpioc 2 GPIO_ACTIVE_LOW>;
 			label = "Debug LD0";
 		};
-		button1_led: led_1 {
+		right_button_led: led_1 {
 			gpios = <&gpiod 2 GPIO_ACTIVE_LOW>;
 			label = "Button 1 LD1";
 		};
-		button2_led: led_2 {
+		left_button_led: led_2 {
 			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
 			label = "Button 2 LD2";
 		};
@@ -62,7 +62,7 @@
 
 	aliases {
 		led0 = &debug_led;
-		led1 = &button1_led;
+		led1 = &left_button_led;
 		sw0 = &left_button;
 		watchdog0 = &iwdg;
 		die-temp0 = &die_temp;
