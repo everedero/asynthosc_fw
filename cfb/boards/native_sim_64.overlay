@@ -10,20 +10,20 @@
 / {
 	gpio_keys {
 		compatible = "gpio-keys";
-		left_button: button_0 {
+		right_button: button_0 {
 			label = "User";
 			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_0>;
+			zephyr,code = <INPUT_KEY_RIGHT>;
 		};
-		right_button: button_1 {
+		left_button: button_1 {
 			label = "User";
 			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_1>;
+			zephyr,code = <INPUT_KEY_LEFT>;
 		};
 		rot_button: button_2 {
 			label = "User";
 			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_2>;
+			zephyr,code = <INPUT_KEY_ENTER>;
 		};
 	};
 	leds {
@@ -51,15 +51,16 @@
 		compatible = "zephyr,gpio-emul-sdl";
 		/* Scancodes correspond to USB HID decimal codes */
 		/* not the usual AT-101 input codes. */
-		/* Here, we map Space, Enter, Left, Right, Up and Down */
-		/* from HID keybord to GPIO0 1 to 6 */
-		scancodes = <44 40 1 2 3 4>;
+		/* Here, we map Left, Right, Enter */
+		/* from HID keybord to GPIO0 1 to 3 */
+		/* 79: Right, 80: Left, 40: Enter */
+		scancodes = <79 80 40 2 3 4>;
 	};
 };
 
 &sdl_dc {
         compatible = "zephyr,sdl-dc";
-	status = "okay";
+        status = "okay";
         height = <64>;
         width = <128>;
 };

@@ -46,17 +46,17 @@
 		right_button: button_0 {
 			label = "User";
 			gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_0>;
+			zephyr,code = <INPUT_KEY_RIGHT>;
 		};
 		left_button: button_1 {
 			label = "User";
 			gpios = <&gpiod 12 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_1>;
+			zephyr,code = <INPUT_KEY_LEFT>;
 		};
 		rot_button: button_2 {
 			label = "User";
 			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_2>;
+			zephyr,code = <INPUT_KEY_ENTER>;
 		};
 	};
 
