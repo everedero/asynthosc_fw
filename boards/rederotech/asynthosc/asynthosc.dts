@@ -39,15 +39,7 @@
 			gpios = <&gpiod 11 GPIO_ACTIVE_LOW>;
 			label = "Button 2 LD2";
 		};
-		enable_display: enable_display {
-			gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
-		};
 	};
-
-		/*enable_display: enable_display {
-			compatible = "enable-gpio";
-			gpios = <&gpiod 9 GPIO_ACTIVE_HIGH>;
-		};*/
 
 	gpio_keys {
 		compatible = "gpio-keys";
