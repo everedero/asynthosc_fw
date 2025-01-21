@@ -8,11 +8,17 @@
 #include <zephyr/dt-bindings/lvgl/lvgl.h>
 
 / {
-	keypad {
+	lvgl_keypad {
 		compatible = "zephyr,lvgl-keypad-input";
 		input = <&buttons>;
 		input-codes = <INPUT_KEY_RIGHT INPUT_KEY_LEFT INPUT_KEY_ENTER>;
 		lvgl-codes =  <LV_KEY_RIGHT LV_KEY_LEFT LV_KEY_ENTER>;
+	};
+
+	lvgl_encoder {
+		compatible = "zephyr,lvgl-encoder-input";
+		rotation-input-code = <INPUT_REL_WHEEL>;
+		button-input-code = <INPUT_KEY_0>;
 	};
 
 };
