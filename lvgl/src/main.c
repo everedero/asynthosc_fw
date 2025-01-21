@@ -111,10 +111,10 @@ int main(void)
 #ifdef CONFIG_LV_Z_KEYPAD_INPUT
 	lv_obj_t *btn_matrix;
 	lv_group_t *btn_matrix_group;
-	static const char *const btnm_map[] = {"1", "2", "3", "4", ""};
+	static const char *const btnm_map[] = {"1", "2", "3", ""};
 
 	btn_matrix = lv_buttonmatrix_create(lv_screen_active());
-	lv_obj_align(btn_matrix, LV_ALIGN_CENTER, 0, 70);
+	lv_obj_align(btn_matrix, LV_ALIGN_CENTER, 0, 0);
 	lv_buttonmatrix_set_map(btn_matrix, (const char **)btnm_map);
 	lv_obj_set_size(btn_matrix, 100, 50);
 
