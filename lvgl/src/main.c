@@ -122,7 +122,7 @@ int main(void)
 	lv_group_add_obj(btn_matrix_group, btn_matrix);
 	lv_indev_set_group(lvgl_input_get_indev(lvgl_keypad), btn_matrix_group);
 #endif /* CONFIG_LV_Z_KEYPAD_INPUT */
-
+/*
 	if (IS_ENABLED(CONFIG_LV_Z_POINTER_INPUT)) {
 		lv_obj_t *hello_world_button;
 
@@ -139,17 +139,17 @@ int main(void)
 	lv_obj_align(hello_world_label, LV_ALIGN_CENTER, 0, 0);
 
 	count_label = lv_label_create(lv_screen_active());
-	lv_obj_align(count_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+	lv_obj_align(count_label, LV_ALIGN_BOTTOM_MID, 0, 0);*/
 	lv_obj_set_style_text_color(lv_screen_active(), lv_color_white(), LV_PART_MAIN);
 
 	lv_timer_handler();
 	display_blanking_off(display_dev);
 
 	while (1) {
-		if ((count % 100) == 0U) {
+	/*	if ((count % 100) == 0U) {
 			sprintf(count_str, "%d", count/100U);
 			lv_label_set_text(count_label, count_str);
-		}
+		}*/
 		lv_timer_handler();
 		++count;
 		k_sleep(K_MSEC(10));
