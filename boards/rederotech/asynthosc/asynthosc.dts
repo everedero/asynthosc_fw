@@ -9,6 +9,7 @@
 #include <st/h7/stm32h743vitx-pinctrl.dtsi>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/dt-bindings/spi/spi.h>
+#include <zephyr/dt-bindings/sensor/qdec_stm32.h>
 
 / {
 	model = "RederoTech AsynthOsc board";
@@ -146,12 +147,15 @@ zephyr_udc0: &usbotg_fs {
 	status = "okay";
 
 	qdec: qdec {
-		status = "disabled";
+		compatible = "st,stm32-qdec";
+		st,input-filter-level = <NO_FILTER>;
+		status = "okay";
 		pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
 		pinctrl-names = "default";
 		st,input-polarity-inverted;
-	//	st,input-filter-level = <FDIV32_N8>;
+		//st,input-filter-level = <FDIV32_N8>;
 		st,counts-per-revolution = <16>;
+		//zephyr,axis = <INPUT_REL_WHEEL>;
 	};
 
 };
@@ -164,6 +168,12 @@ zephyr_udc0: &usbotg_fs {
 &adc1 {
 	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
 	pinctrl-names = "default";
+	st,adc-clock-source = "SYNC";
+	st,adc-prescaler = <4>;
+	status = "okay";
+};
+
+&adc3 {
 	st,adc-clock-source = "SYNC";
 	st,adc-prescaler = <4>;
 	status = "okay";
