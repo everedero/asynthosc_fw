@@ -55,6 +55,7 @@
 			zephyr,code = <INPUT_KEY_LEFT>;
 		};
 		rot_button: button_2 {
+			status = "disabled";
 			label = "User";
 			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_ENTER>;
