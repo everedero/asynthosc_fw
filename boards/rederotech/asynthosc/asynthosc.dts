@@ -61,6 +61,17 @@
 		};
 	};
 
+	 gpioqdec: qdec1 {
+		status = "okay";
+		 compatible = "gpio-qdec";
+		 gpios = <&gpioc 8 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>, //&gpiob 4 if rework
+			  <&gpiod 14 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+		 steps-per-period = <4>;
+		 zephyr,axis = <INPUT_REL_WHEEL>;
+		 sample-time-us = <2000>;
+		 idle-timeout-ms = <200>;
+	 };
+
 	aliases {
 		led0 = &debug_led;
 		led1 = &left_button_led;
@@ -69,7 +80,7 @@
 		die-temp0 = &die_temp;
 		volt-sensor0 = &vref;
 		volt-sensor1 = &vbat;
-		qdec0 = &qdec;
+		qdec0 = &gpioqdec;
 	};
 };
 
@@ -144,20 +155,17 @@ zephyr_udc0: &usbotg_fs {
 };
 
 &timers3 {
-	status = "okay";
+	status = "disabled";
 
 	qdec: qdec {
 		compatible = "st,stm32-qdec";
-		st,input-filter-level = <NO_FILTER>;
-		status = "okay";
+		status = "disabled";
 		pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
 		pinctrl-names = "default";
 		st,input-polarity-inverted;
-		//st,input-filter-level = <FDIV32_N8>;
-		st,counts-per-revolution = <16>;
-		//zephyr,axis = <INPUT_REL_WHEEL>;
+		st,input-filter-level = <NO_FILTER>;
+		st,counts-per-revolution = <4>;
 	};
-
 };
 
 &timers1 {
