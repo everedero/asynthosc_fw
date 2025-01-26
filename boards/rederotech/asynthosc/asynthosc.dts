@@ -47,12 +47,12 @@
 		right_button: button_0 {
 			label = "User";
 			gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_RIGHT>;
+			zephyr,code = <INPUT_KEY_ENTER>;
 		};
 		left_button: button_1 {
 			label = "User";
 			gpios = <&gpiod 12 GPIO_ACTIVE_LOW>;
-			zephyr,code = <INPUT_KEY_LEFT>;
+			zephyr,code = <INPUT_KEY_ESC>;
 		};
 		rot_button: button_2 {
 			status = "disabled";

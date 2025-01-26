@@ -95,24 +95,28 @@ int main(void)
 	}
 #endif /* CONFIG_RESET_COUNTER_SW0 */
 
-#ifdef CONFIG_LV_Z_ENCODER_INPUT
+#ifdef YO
+//#ifdef CONFIG_LV_Z_ENCODER_INPUT
 	lv_obj_t *arc;
 	lv_group_t *arc_group;
 
 	arc = lv_arc_create(lv_screen_active());
 	lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
-	lv_obj_set_size(arc, 60, 60);
+	lv_obj_set_size(arc, 50, 50);
+	lv_obj_set_style_arc_color(arc, lv_color_white(), LV_PART_MAIN);
+	lv_obj_set_style_arc_color(arc, lv_color_black(), LV_PART_INDICATOR);
+	lv_obj_set_style_arc_color(arc, lv_color_black(), LV_PART_KNOB);
+	lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
+	lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
+	lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_KNOB);
 
 	arc_group = lv_group_create();
 	lv_group_add_obj(arc_group, arc);
 	lv_indev_set_group(lvgl_input_get_indev(lvgl_encoder), arc_group);
-	lv_obj_set_style_arc_color(arc, lv_color_white(), LV_PART_MAIN);
-	lv_obj_set_style_arc_color(arc, lv_color_black(), LV_PART_INDICATOR);
-	lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
+	LOG_INF("lvgl encoder: %s", lvgl_encoder->name);
 #endif /* CONFIG_LV_Z_ENCODER_INPUT */
 
-#ifdef YO
-//#ifdef CONFIG_LV_Z_KEYPAD_INPUT
+#ifdef CONFIG_LV_Z_KEYPAD_INPUT
 	lv_obj_t *btn_matrix;
 	lv_group_t *btn_matrix_group;
 	static const char *const btnm_map[] = {"1", "2", "3", ""};
@@ -126,7 +130,7 @@ int main(void)
 	lv_group_add_obj(btn_matrix_group, btn_matrix);
 	lv_indev_set_group(lvgl_input_get_indev(lvgl_keypad), btn_matrix_group);
 	lv_obj_set_style_text_color(lv_screen_active(), lv_color_white(), LV_PART_MAIN);
-	lv_obj_set_style_bg_color(btn_matrix, lv_color_black(), LV_PART_ITEMS | LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn_matrix, lv_color_black(), LV_PART_ITEMS | LV_STATE_PRESSED | LV_STATE_FOCUSED);
 	lv_obj_set_style_bg_opa(btn_matrix, LV_OPA_COVER, LV_PART_ITEMS);
 #endif /* CONFIG_LV_Z_KEYPAD_INPUT */
 

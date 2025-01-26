@@ -8,6 +8,7 @@
 
 / {
 	qdec {
+		status = "okay";
 		compatible = "gpio-qdec";
 		gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>, <&gpio0 5 GPIO_ACTIVE_HIGH>;
 		steps-per-period = <4>;
@@ -50,8 +51,8 @@
 	lvgl_keypad_input {
 		compatible = "zephyr,lvgl-keypad-input";
 		input = <&keys>;
-		input-codes = <INPUT_KEY_RIGHT INPUT_KEY_LEFT INPUT_KEY_ENTER>;// INPUT_KEY_DOWN INPUT_KEY_UP>;
-		lvgl-codes = <LV_KEY_RIGHT LV_KEY_LEFT LV_KEY_ENTER>;// LV_KEY_DOWN LV_KEY_UP>;
+		input-codes = <INPUT_KEY_RIGHT INPUT_KEY_LEFT INPUT_KEY_ENTER>;
+		lvgl-codes = <LV_KEY_RIGHT LV_KEY_LEFT LV_KEY_ENTER>;
 	};
 
 	lvgl_encoder_input {
