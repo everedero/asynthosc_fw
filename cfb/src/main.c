@@ -10,6 +10,32 @@
 #include <zephyr/drivers/gpio.h>
 #include <stdio.h>
 
+const struct gpio_dt_spec right_led = GPIO_DT_SPEC_GET(DT_NODELABEL(right_button_led), gpios);
+const struct gpio_dt_spec left_led = GPIO_DT_SPEC_GET(DT_NODELABEL(left_button_led), gpios);
+
+int init_led(struct gpio_dt_spec led1)
+{
+	int ret;
+
+	if (led1.port && !gpio_is_ready_dt(&led1)) {
+		printk("Error %d: LED device %s is not ready; ignoring it\n",
+		       ret, led1.port->name);
+		led1.port = NULL;
+	}
+	if (led1.port) {
+		ret = gpio_pin_configure_dt(&led1, GPIO_OUTPUT);
+		if (ret != 0) {
+			printk("Error %d: failed1 to configure LED device %s pin %d\n",
+			       ret, led1.port->name, led1.pin);
+			led1.port = NULL;
+		} else {
+			printk("Set up LED at %s pin %d\n", led1.port->name, led1.pin);
+		}
+	}
+
+	return 0;
+}
+
 int main(void)
 {
 	const struct device *dev;
@@ -20,6 +46,9 @@ int main(void)
 	uint8_t font_width;
 	uint8_t font_height;
 	int ret;
+
+	init_led(left_led);
+	init_led(right_led);
 
 	dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 	if (!device_is_ready(dev)) {
@@ -71,8 +100,8 @@ int main(void)
 	cfb_framebuffer_invert(dev);
 
 	cfb_set_kerning(dev, 0);
-	cfb_print(dev, "Welcome to RederoTech", 0, 0);
-	cfb_print(dev, "Life is great", 0, 18 * 2);
+	cfb_print(dev, "RederoTech", 0, 0);
+	cfb_print(dev, "Inside", 0, 18 * 2);
 	cfb_invert_area(dev, 0, 18*2, 128, 18*3);
 	cfb_framebuffer_finalize(dev);
 
@@ -80,5 +109,16 @@ int main(void)
 	display_blanking_on(dev);
 	k_sleep(K_MSEC(2000));
 	display_blanking_off(dev);
+	while (1) {
+		ret = gpio_pin_toggle_dt(&right_led);
+		if (ret < 0) {
+			return 0;
+		}
+		ret = gpio_pin_toggle_dt(&left_led);
+		if (ret < 0) {
+			return 0;
+		}
+		k_sleep(K_MSEC(1000));
+	}
 	return 0;
 }
