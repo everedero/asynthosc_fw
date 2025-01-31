@@ -234,6 +234,12 @@ west init -m https://github.com/everedero/asynthosc_fw --mr main my-workspace
 cd my-workspace
 west update
 ```
+### Git key magic
+By default west configures the repository to be http identification, so get back to ssh by opening
+.git/config and changing url to:
+```
+git@github.com:everedero/asynthosc_fw.git
+```
 
 ### Building and running
 
