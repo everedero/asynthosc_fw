@@ -212,16 +212,25 @@ Before getting started, make sure you have a proper Zephyr development
 environment. Follow the official
 [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/getting_started/index.html).
 
+Quick summary:
+
+* Install a venv and activate it
+* Then install west meta-tool:
+
+    pip3 install west
+
 ### Initialization
 
 The first step is to initialize the workspace folder (``my-workspace``) where
 the ``asynthosc-application`` and all Zephyr modules will be cloned. Run the following
 command:
 
+* Initialize my-workspace for the asynthosc-application (main branch)
 ```shell
-# initialize my-workspace for the asynthosc-application (main branch)
 west init -m https://github.com/everedero/asynthosc_fw --mr main my-workspace
-# update Zephyr modules
+```
+* Update Zephyr modules
+```shell
 cd my-workspace
 west update
 ```
