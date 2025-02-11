@@ -175,7 +175,8 @@ zephyr_udc0: &usbotg_fs {
 };
 
 &adc1 {
-	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp10_pc0>;
+	//CV0: chan 16, CV1: chan 15, CV2: chan 19, CV3: chan 3, testpoint "A9": chan 10
+	pinctrl-0 = <&adc1_inp16_pa0 &adc1_inp15_pa3 &adc1_inp19_pa5 &adc1_inp3_pa6 &adc1_inp10_pc0>;
 	pinctrl-names = "default";
 	st,adc-clock-source = "SYNC";
 	st,adc-prescaler = <4>;
