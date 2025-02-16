@@ -55,7 +55,6 @@
 			zephyr,code = <INPUT_KEY_LEFT>;
 		};
 		rot_button: button_2 {
-			status = "disabled";
 			label = "User";
 			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_ENTER>;
@@ -63,7 +62,7 @@
 	};
 
 	 gpioqdec: qdec1 {
-		status = "okay";
+		status = "disabled";
 		 compatible = "gpio-qdec";
 		 gpios = <&gpioc 8 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>, //&gpiob 4 if rework
 			  <&gpiod 14 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
@@ -153,20 +152,6 @@ zephyr_udc0: &usbotg_fs {
 	clocks = <&rcc STM32_CLOCK_BUS_APB4 0x00010000>,
 		 <&rcc STM32_SRC_LSI RTC_SEL(2)>;
 	status = "okay";
-};
-
-&timers3 {
-	status = "disabled";
-
-	qdec: qdec {
-		compatible = "st,stm32-qdec";
-		status = "disabled";
-		pinctrl-0 = <&tim3_ch3_pc8 &tim3_ch1_pb4>;
-		pinctrl-names = "default";
-		st,input-polarity-inverted;
-		st,input-filter-level = <NO_FILTER>;
-		st,counts-per-revolution = <4>;
-	};
 };
 
 &timers1 {
