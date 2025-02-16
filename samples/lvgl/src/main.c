@@ -20,6 +20,9 @@ LOG_MODULE_REGISTER(app);
 
 static uint32_t count;
 
+const struct gpio_dt_spec right_led = GPIO_DT_SPEC_GET(DT_NODELABEL(right_button_led), gpios);
+const struct gpio_dt_spec left_led = GPIO_DT_SPEC_GET(DT_NODELABEL(left_button_led), gpios);
+
 #ifdef CONFIG_RESET_COUNTER_SW0
 static struct gpio_dt_spec button_gpio = GPIO_DT_SPEC_GET_OR(
 		DT_ALIAS(sw0), gpios, {0});
@@ -54,12 +57,38 @@ static void lv_btn_click_callback(lv_event_t *e)
 	count = 0;
 }
 
+int init_led(struct gpio_dt_spec led1)
+{
+	int ret;
+
+	if (led1.port && !gpio_is_ready_dt(&led1)) {
+		printk("Error %d: LED device %s is not ready; ignoring it\n",
+		       ret, led1.port->name);
+		led1.port = NULL;
+	}
+	if (led1.port) {
+		ret = gpio_pin_configure_dt(&led1, GPIO_OUTPUT);
+		if (ret != 0) {
+			printk("Error %d: failed1 to configure LED device %s pin %d\n",
+			       ret, led1.port->name, led1.pin);
+			led1.port = NULL;
+		} else {
+			printk("Set up LED at %s pin %d\n", led1.port->name, led1.pin);
+		}
+	}
+
+	return 0;
+}
+
 int main(void)
 {
 	char count_str[11] = {0};
 	const struct device *display_dev;
 	lv_obj_t *hello_world_label;
 	lv_obj_t *count_label;
+
+	init_led(left_led);
+	init_led(right_led);
 
 	display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 	if (!device_is_ready(display_dev)) {
@@ -111,8 +140,7 @@ int main(void)
 	lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
 #endif /* CONFIG_LV_Z_ENCODER_INPUT */
 
-#ifdef YO
-//#ifdef CONFIG_LV_Z_KEYPAD_INPUT
+#ifdef CONFIG_LV_Z_KEYPAD_INPUT
 	lv_obj_t *btn_matrix;
 	lv_group_t *btn_matrix_group;
 	static const char *const btnm_map[] = {"1", "2", "3", ""};
@@ -130,7 +158,7 @@ int main(void)
 	lv_obj_set_style_bg_opa(btn_matrix, LV_OPA_COVER, LV_PART_ITEMS);
 #endif /* CONFIG_LV_Z_KEYPAD_INPUT */
 
-	lv_timer_handler();
+//	lv_timer_handler();
 	display_blanking_off(display_dev);
 
 	while (1) {
