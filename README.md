@@ -324,18 +324,3 @@ make html
 
 The output will be stored in the ``_build_sphinx`` folder. You may check for
 other output formats other than HTML by running ``make help``.
-
-## Bringup todo list
-* Debug LEDs: OK
-* Buttons: OK
-* Buttons LEDs: OK, make markings for equipment
-* UART2: OK
-* Enable 10V: OK
-* USB data: OK, make markings for equipment
-* QSPI flash: OK
-* MDIO bus / RMII / Ethernet: OK after rework, ldo disconnect and led2 pull-down
-* Display: OK, verify grey lines, maybe voltage bias issue
-* DAC: TBD
-* Analog: TBD
-* MIDI: TBD
-* Supply: TBD
