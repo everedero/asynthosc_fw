@@ -292,6 +292,25 @@ To execute Twister integration tests, run the following command:
 west twister -T tests --integration
 ```
 
+### Notes for USB to OSC
+
+#### Interact with echo server
+##### UDP echo server
+
+    ncat -e /bin/cat -k -u -l 4242
+
+##### Server display, not echo
+
+    nc -lu 4242
+
+### Compile Shell over USB support
+
+It means we don’t need an FTDI
+
+    cd ~/zephyrproject/zephyr/samples/subsys/shell
+
+    west build -p always -b $BOARD ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
+
 ### Documentation
 
 A minimal documentation setup is provided for Doxygen and Sphinx. To build the
