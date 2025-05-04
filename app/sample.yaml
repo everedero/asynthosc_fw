@@ -1,12 +1,13 @@
+common:
+  harness: display
+  tags: display
 sample:
-  name: Blinky Sample
+  description: Character framebuffer test
+  name: cfb sample
 tests:
-  sample.basic.blinky:
-    tags:
-      - LED
-      - gpio
-    filter: dt_enabled_alias_with_parent_compat("led0", "gpio-leds")
-    depends_on: gpio
-    harness: led
-    integration_platforms:
-      - asynthosc
+  sample.display.cfb.ssd1306:
+    platform_allow: frdm_k64f
+    extra_args: SHIELD=ssd1306_128x64
+    tags: shield
+  sample.display.cfb.ssd16xx:
+    platform_allow: reel_board

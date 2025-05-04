@@ -1,0 +1,66 @@
+/*
+ * Copyright (c) 2024, Eve Redero
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/lvgl/lvgl.h>
+
+/ {
+	gpio_keys {
+		compatible = "gpio-keys";
+		right_button: button_0 {
+			label = "User";
+			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_RIGHT>;
+		};
+		left_button: button_1 {
+			label = "User";
+			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_LEFT>;
+		};
+		rot_button: button_2 {
+			label = "User";
+			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+			zephyr,code = <INPUT_KEY_ENTER>;
+		};
+	};
+	leds {
+		debug_led: led_0 {
+			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+			label = "Debug LD0";
+		};
+		right_button_led: led_1 {
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+			label = "Button 1 LD1";
+		};
+		left_button_led: led_2 {
+			gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
+			label = "Button 2 LD2";
+		};
+	};
+};
+
+
+&gpio0 {
+	ngpios = <6>;
+
+	sdl_gpio {
+		status = "okay";
+		compatible = "zephyr,gpio-emul-sdl";
+		/* Scancodes correspond to USB HID decimal codes */
+		/* not the usual AT-101 input codes. */
+		/* Here, we map Left, Right, Enter */
+		/* from HID keybord to GPIO0 1 to 3 */
+		/* 79: Right, 80: Left, 40: Enter */
+		scancodes = <0 79 80 40 2 3 4>;
+	};
+};
+
+&sdl_dc {
+        compatible = "zephyr,sdl-dc";
+        status = "okay";
+        height = <64>;
+        width = <128>;
+};
