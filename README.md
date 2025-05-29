@@ -144,6 +144,49 @@ You can even separate the ST-Link part from the Nucleo part with the breakout pa
 -->
 ![Kroki generated Ditaa](https://kroki.io/ditaa/svg/eNpTUICAfC4wpa2rq6sNYdYoGAJxmIsLiGMcZgwTBWIY0wiIg8OdfbwVFLxCnL2xqDAGYnc_FywyJmC9Lp7-IL2-wVhUmAKxX1BwCJADorCoMAOb4Q_ieIW4-GOogPgGAGM1LFQ=)
 
+###### BlackMagic Probe on STM32F103RCT6 breakout board
+
+This adapter was made following instructions [here](https://stm32world.com/wiki/DIY_STM32_Programmer_(ST-Link/V2-1))
+using [a STM32F103 breakout board](https://fr.aliexpress.com/item/1005008154652916.html)
+
+* In order to flash the BlackMagicProbe on the STM32F106 board
+
+| ST-Link connector pin | Name | STM32F106 breakout |
+|-----------------------|------|--------------------|
+| 1                     | 3V3  | 3V3                |
+| 2                     | JTCK | A14                |
+| 3                     | GND  | G                  |
+| 4                     | JTMS | A13                |
+| 5                     | nRST | RST                |
+
+* Once BlackMagic is flashed, the STM32F106 becomes the probe with the following pinout
+
+| ST-Link connector pin | Name | STM32F106 breakout |
+|-----------------------|------|--------------------|
+| 1                     | 3V3  | NE (R bridge to A0)|
+| 2                     | JTCK | A5                 |
+| 3                     | GND  | G                  |
+| 4                     | JTMS | B14 (100o B12)     |
+| 5                     | nRST | B0                 |
+| 6                     | JTDO | A6                 |
+| 7                     | JTDI | A7                 |
+
+* Pin 4 (SWDIO) needs to be connected to B14 and also to B12 via a 100 ohms resistor
+* 3V3 is the target voltage detection, it needs a divide-by-two resistor bridge to A0 to be working correctly
+
+The adapter also provides a target debug UART:
+
+| UART Target | STM32F106 UART | STM32F106 breakout |
+|-------------|----------------|--------------------|
+| TX          | RX             | A3                 |
+| RX          | TX             | A2                 |
+
+In order to install the adapter, you will have to configure udev rules (on Linux) or install
+a custom driver (on Windows) so that the BlackMagic probe serial connections will appear with
+aliases "/dev/ttyBmpTarg" and "/dev/ttyBmpGdb".
+
+The configuration files are available [here](https://github.com/blackmagic-debug/blackmagic/tree/main/driver).
+
 ###### Official ST-LinK/V2
 Oh yeah, you can actually by the probe too. Be careful when buying those, there are quite a fair amount of ST-Link counterfeits and not all of them are fully functional.
 <!--
