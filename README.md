@@ -5,14 +5,13 @@ The hardware design for the board is available [here](https://github.com/everede
 
 This board is based upon STM32H743VITx.
 
-This repository is versioned together with the [Zephyr main tree][zephyr]. This
-means that every time that Zephyr is tagged, this repository is tagged as well
-with the same version number, and the [manifest](west.yml) entry for `zephyr`
-will point to the corresponding Zephyr tag. For example, the `asynthosc-application`
-v2.6.0 will point to Zephyr v2.6.0. Note that the `main` branch always
-points to the development branch of Zephyr, also `main`.
+This repository depends on the Zephyr project.
+The [manifest](west.yml) is used the select the compatible Zephyr version.
 
 [zephyr]: https://github.com/zephyrproject-rtos/zephyr
+
+Note: do not "git clone" this project, see installation instructions to run
+"west init" in order to initialize the project.
 
 ## Probe connection
 
@@ -260,7 +259,9 @@ Quick summary:
 * Install a venv and activate it
 * Then install west meta-tool:
 
-    pip3 install west
+```
+pip3 install west
+```
 
 ### Initialization
 
