@@ -17,7 +17,8 @@ int init_led(struct gpio_dt_spec led1)
 {
 	int ret;
 
-	if (led1.port && !gpio_is_ready_dt(&led1)) {
+	ret = gpio_is_ready_dt(&led1);
+	if (led1.port && !ret) {
 		printk("Error %d: LED device %s is not ready; ignoring it\n",
 		       ret, led1.port->name);
 		led1.port = NULL;
