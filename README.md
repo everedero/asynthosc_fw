@@ -298,13 +298,6 @@ You can use the `asynthosc` board found in this
 repository. Note that Zephyr sample boards may be used if an
 appropriate overlay is provided (see `app/boards`).
 
-A sample debug configuration is also provided. To apply it, run the following
-command:
-
-```shell
-west build -b asynthosc app -- -DEXTRA_CONF_FILE=debug.conf
-```
-
 Once you have built the application, run the following command to flash it:
 
 ```shell
@@ -318,7 +311,7 @@ Left and right pushbuttons are emulated by keyboard left and right.
 Rotary encoder click is by keyboard enter.
 
 ```shell
-west build -b native_sim/native/64 app -- -DEXTRA_CONF_FILE=debug.conf
+west build -b native_sim/native/64 app
 ```
 
 Then, execute:
