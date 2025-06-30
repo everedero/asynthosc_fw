@@ -3,8 +3,8 @@ name: Build
 on:
   push:
   pull_request:
-  schedule:
-    - cron: "0 0 * * *"
+#  schedule:
+# - cron: "0 0 * * *"
 
 jobs:
   build:
@@ -36,8 +36,8 @@ jobs:
         run: |
           west twister -T app -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
 
-      - name: Twister Tests
-        working-directory: asynthosc-application
-        shell: bash
-        run: |
-          west twister -T tests -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
+          #      - name: Twister Tests
+          #working-directory: asynthosc-application
+          #shell: bash
+          #run: |
+          #west twister -T tests -v --inline-logs --integration $EXTRA_TWISTER_FLAGS

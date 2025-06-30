@@ -1,13 +1,18 @@
 common:
-  harness: display
-  tags: display
+  harness: asynthosc
+  tags: asynthosc
 sample:
-  description: Character framebuffer test
-  name: cfb sample
+  description: Asynthosc app testing
+  name: App test
 tests:
-  sample.display.cfb.ssd1306:
-    platform_allow: frdm_k64f
-    extra_args: SHIELD=ssd1306_128x64
-    tags: shield
-  sample.display.cfb.ssd16xx:
-    platform_allow: reel_board
+  app.test:
+    platform_allow:
+      - asynthosc
+      - native_sim/native/64
+    extra_args: CONFIG_TEST=y
+    tags: simple test
+  sample.osc_sock_client:
+    platform_allow:
+      - asynthosc
+      - native_sim/native/64
+    tags: sock client test
