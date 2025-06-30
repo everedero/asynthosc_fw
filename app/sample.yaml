@@ -8,11 +8,9 @@ tests:
   app.test:
     platform_allow:
       - asynthosc
-      - native_sim/native/64
     extra_args: CONFIG_TEST=y
     tags: simple test
   sample.osc_sock_client:
     platform_allow:
       - asynthosc
-      - native_sim/native/64
     tags: sock client test
