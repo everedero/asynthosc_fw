@@ -279,10 +279,10 @@ cd my-workspace
 west update
 ```
 ### Git key magic
-By default west configures the repository to be http identification, so get back to ssh by opening
-.git/config and changing url to:
+By default west configures the repository to be http identification, if you want
+to get back to ssh, you can do it with:
 ```
-git@github.com:everedero/asynthosc_fw.git
+git config remote.origin.url git@github.com:everedero/asynthosc_fw.git
 ```
 
 ### Building and running
@@ -290,9 +290,8 @@ git@github.com:everedero/asynthosc_fw.git
 To build the application, run the following command:
 
 ```shell
-cd asynthosc-fw
-BOARD=asynthosc
-west build -b $BOARD app
+cd asynthosc_fw
+west build -b asynthosc app
 ```
 
 You can use the `asynthosc` board found in this
@@ -303,7 +302,7 @@ A sample debug configuration is also provided. To apply it, run the following
 command:
 
 ```shell
-west build -b $BOARD app -- -DEXTRA_CONF_FILE=debug.conf
+west build -b asynthosc app -- -DEXTRA_CONF_FILE=debug.conf
 ```
 
 Once you have built the application, run the following command to flash it:
@@ -353,7 +352,7 @@ It means we don’t need an FTDI
 
     cd ~/zephyrproject/zephyr/samples/subsys/shell
 
-    west build -p always -b $BOARD ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
+    west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
 
 ### Documentation
 
