@@ -322,10 +322,10 @@ Then, execute:
 
 ### Testing
 
-To execute Twister integration tests, run the following command:
+To execute Twister application tests, run the following command:
 
 ```shell
-west twister -T tests --integration
+west twister -T app --integration
 ```
 
 ### Notes for USB to OSC
