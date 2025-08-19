@@ -328,6 +328,20 @@ To execute Twister application tests, run the following command:
 west twister -T app --integration
 ```
 
+If it’s missing modules, maybe you forgot to activate the right virtual env?
+
+```shell
+source ~/zephyrproject/.venv/bin/activate
+```
+
+In order to test the library in details:
+
+```shell
+west twister -T tests/lib/tinyosc/ --integration
+```
+
+Don’t forget to add more tests in tests/lib/tinyosc/src/main.c!
+
 ### Notes for USB to OSC
 
 #### Interact with echo server
