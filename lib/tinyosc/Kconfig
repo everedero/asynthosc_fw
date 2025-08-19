@@ -1,0 +1,15 @@
+# Copyright (c) 2021, Legrand North America, LLC.
+# SPDX-License-Identifier: Apache-2.0
+
+config TINYOSC
+	bool "Support for tinyosc library"
+	help
+	  This option enables the tinyosc library
+
+config TINYOSC_BUNDLE_ID
+	int "custom_get_value() default return value"
+	depends on TINYOSC
+	default 2549729456036799744 #0x2362756E646C6500
+	help
+          Bundle ID used to identify tinyosc messages.
+          Default value is "#bundle"
