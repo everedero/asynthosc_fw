@@ -5,9 +5,9 @@
  */
 
 /*
- * @file test custom_lib library
+ * @file test tinyosc_lib library
  *
- * This suite verifies that the methods provided with the custom_lib
+ * This suite verifies that the methods provided with the tinyosc
  * library works correctly.
  */
 
@@ -17,7 +17,7 @@
 
 #include <app/lib/tinyosc.h>
 
-ZTEST(custom_lib, test_get_value)
+ZTEST(tinyosc_lib, test_get_value)
 {
  /*default 2549729456036799744 #0x2362756E646C6500*/
 	uint8_t buffer[8] = {0x23, 0x62, 0x75, 0x6E, 0x64, 0x6C, 0x65, 0x00};

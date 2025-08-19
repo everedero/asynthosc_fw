@@ -340,6 +340,12 @@ In order to test the library in details:
 west twister -T tests/lib/tinyosc/ --integration
 ```
 
+Or to run manually:
+```shell
+west build -p -b qemu_cortex_m0/nrf51822 tests/lib/tinyosc -T lib.tinyosc
+west build -t run
+```
+
 Don’t forget to add more tests in tests/lib/tinyosc/src/main.c!
 
 ### Notes for USB to OSC

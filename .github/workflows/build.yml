@@ -36,8 +36,8 @@ jobs:
         run: |
           west twister -T app -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
 
-          #      - name: Twister Tests
-          #working-directory: asynthosc-application
-          #shell: bash
-          #run: |
-          #west twister -T tests -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
+      - name: Twister Tests
+        working-directory: asynthosc-application
+        shell: bash
+        run: |
+           west twister -T tests/lib/tinyosc -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
