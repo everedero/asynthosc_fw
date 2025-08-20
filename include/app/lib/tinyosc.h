@@ -162,6 +162,7 @@ uint32_t tosc_getBundleLength(tosc_bundle *b);
 uint32_t tosc_writeMessage(char *buffer, const int len, const char *address,
     const char *fmt, ...);
 
+#ifdef CONFIG_TINYOSC_PRINTF
 /**
  * A convenience function to (non-destructively) print a buffer containing
  * an OSC message to stdout.
@@ -173,6 +174,7 @@ void tosc_printOscBuffer(char *buffer, const int len);
  * to stdout.
  */
 void tosc_printMessage(tosc_message *o);
+#endif //CONFIG_TINYOSC_PRINTF
 
 #ifdef __cplusplus
 }

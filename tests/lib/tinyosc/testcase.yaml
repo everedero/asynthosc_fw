@@ -6,4 +6,4 @@ common:
 tests:
   lib.tinyosc: {}
   lib.tinyosc.non_default:
-    extra_args: CONFIG_TINYOSC_BUNDLE_ID=666
+    extra_args: CONFIG_TINYOSC_PRINTF=y

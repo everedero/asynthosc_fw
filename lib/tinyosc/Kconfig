@@ -13,3 +13,9 @@ config TINYOSC_BUNDLE_ID
 	help
           Bundle ID used to identify tinyosc messages.
           Default value is "#bundle"
+
+config TINYOSC_PRINTF
+	bool "Support for tinyosc printf utilities"
+	default 0
+	help
+	  Enabling tinyosc printf utilities

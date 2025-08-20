@@ -284,6 +284,7 @@ uint32_t tosc_writeMessage(char *buffer, const int len,
   return i; // return the total number of bytes written
 }
 
+#ifdef CONFIG_TINYOSC_PRINTF
 void tosc_printOscBuffer(char *buffer, const int len) {
   // parse the buffer contents (the raw OSC bytes)
   // a return value of 0 indicates no error
@@ -329,3 +330,4 @@ void tosc_printMessage(tosc_message *osc) {
   }
   printf("\n");
 }
+#endif //CONFIG_TINYOSC_PRINTF
