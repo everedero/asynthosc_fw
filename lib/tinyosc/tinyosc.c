@@ -314,7 +314,7 @@ void tosc_printMessage(tosc_message *osc) {
         printf(" 0x%02X%02X%02X%02X", m[0], m[1], m[2], m[3]);
         break;
       }
-      case 'f': printf(" %g", tosc_getNextFloat(osc)); break;
+      case 'f': printf(" %g", (double)tosc_getNextFloat(osc)); break;
       case 'd': printf(" %g", tosc_getNextDouble(osc)); break;
       case 'i': printf(" %d", tosc_getNextInt32(osc)); break;
       case 'h': printf(" %lld", tosc_getNextInt64(osc)); break;
