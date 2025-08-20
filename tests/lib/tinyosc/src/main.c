@@ -17,12 +17,12 @@
 
 #include <app/lib/tinyosc.h>
 
-static char tx_buffer[2048]; // declare a 2Kb buffer to read packet data into
-int max_len = 2048;
+static char tx_buffer[256]; // declare a 256b buffer to read packet data into
+int max_len = 256;
 
 ZTEST(tinyosc_lib, test_bundle_id)
 {
- /*default 2549729456036799744 #0x2362756E646C6500*/
+ /*defaults to "#bundle" 0x2362756E646C6500*/
 	uint8_t buffer[8] = {0x23, 0x62, 0x75, 0x6E, 0x64, 0x6C, 0x65, 0x00};
 	bool tested;
 	tested = tosc_isBundle(buffer);
@@ -35,13 +35,13 @@ ZTEST(tinyosc_lib, test_bundle_id)
 }
 
 
-/* Test vectors copied from OSCBundle_test.ino from https://github.com/CNMAT/OSC*/
-ZTEST(tinyosc_lib, test_bundle_create)
+/* Test vectors copied from OSCBundle_test.ino from https://github.com/CNMAT/OSC */
+/* Will only work with timestamps to 0 and default #bundle separator */
+ZTEST(tinyosc_lib, test_bundle_encode)
 {
-  // TestPrint printer;
   tosc_bundle bundle;
   uint32_t len;
-  //this is the desired output
+  // This is the desired output
   uint8_t testBuffer[] = {35, 98, 117, 110, 100, 108, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 47, 97, 0, 0, 44, 105, 0, 0, 0, 0, 0, 1, 0, 0, 0, 12, 47, 98, 0, 0, 44, 105, 0, 0, 0, 0, 0, 2};
   // All timestamps to zero for test
   tosc_writeBundle(&bundle, 0, tx_buffer, max_len);
@@ -54,5 +54,31 @@ ZTEST(tinyosc_lib, test_bundle_create)
   }
 }
 
+ZTEST(tinyosc_lib, test_bundle_decode)
+{
+  tosc_bundle bundle;
+  bool is_msg;
+  uint8_t testBuffer[] = {35, 98, 117, 110, 100, 108, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 47, 97, 0, 0, 44, 105, 0, 0, 0, 0, 0, 1, 0, 0, 0, 12, 47, 98, 0, 0, 44, 105, 0, 0, 0, 0, 0, 2};
+  tosc_message msg;
+  // All timestamps to zero for test
+  tosc_parseBundle(&bundle, testBuffer, sizeof(testBuffer));
+  zassert_equal(tosc_getTimetag(&bundle), 0, "Time tag should be 0");
+  // First bundle message
+  is_msg = tosc_getNextMessage(&bundle, &msg);
+  zassert_true(is_msg, "Message not found");
+  zassert_str_equal(tosc_getFormat(&msg), "i", "Wrong format, should be int");
+  zassert_str_equal(tosc_getAddress(&msg), "/a", "Wrong address, should be /a");
+  zassert_equal(tosc_getNextInt32(&msg), 1, "Wrong integer, should be 1");
+
+  // Second bundle message
+  is_msg = tosc_getNextMessage(&bundle, &msg);
+  zassert_true(is_msg, "Message not found");
+  zassert_str_equal(tosc_getFormat(&msg), "i", "Wrong format (2), should be int");
+  zassert_str_equal(tosc_getAddress(&msg), "/b", "Wrong address, should be /b");
+  zassert_equal(tosc_getNextInt32(&msg), 2, "Wrong integer, should be 2");
+
+  is_msg = tosc_getNextMessage(&bundle, &msg);
+  zassert_false(is_msg, "Message detected at end of bundle");
+}
 
 ZTEST_SUITE(tinyosc_lib, NULL, NULL, NULL, NULL, NULL);
