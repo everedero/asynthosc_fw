@@ -34,6 +34,25 @@ ZTEST(tinyosc_lib, test_bundle_id)
 	}
 }
 
+ZTEST(tinyosc_lib, test_bundle_timestamp)
+{
+  tosc_bundle bundle;
+  uint32_t len;
+  uint64_t timestamp;
+  // This is the desired output
+  uint8_t testBuffer[] = {35, 98, 117, 110, 100, 108, 101, 0, 0xfe, 0xed, 0xde, 0xad, 0xc0, 0x07, 0xca, 0xfe};
+  // Writing timestamp in bundle
+  tosc_writeBundle(&bundle, 0xfeeddeadc007cafe, tx_buffer, max_len);
+  len = tosc_getBundleLength(&bundle);
+  zassert_equal(len, sizeof(testBuffer), "Length mismatch");
+  // Retrieving timestamp from bundle
+  timestamp = tosc_getTimetag(&bundle);
+  zassert_equal(timestamp, 0xfeeddeadc007cafe, "Write and read timestamp failed");
+  // Testing all buffer
+  for (int i = 0; i < sizeof(testBuffer); i++){
+    zassert_equal(testBuffer[i], tx_buffer[i], "Value mismatch at index %d. Expected 0x%02x, got 0x%02x", i, testBuffer[i], tx_buffer[i]);
+  }
+}
 
 /* Test vectors copied from OSCBundle_test.ino from https://github.com/CNMAT/OSC */
 /* Will only work with timestamps to 0 and default #bundle separator */
