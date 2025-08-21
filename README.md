@@ -367,6 +367,68 @@ It means we don’t need an FTDI
 
     west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
 
+### Timestamp retrieve
+To be implemented.
+
+Real Time Clock (RTC) is not precise enough for our application.
+In order to keep good timing, we use NTP to retrieve a clock through network,
+and we update it with a timer.
+
+<!--
+skinparam ranksep 20
+skinparam dpi 125
+skinparam packageTitleAlignment left
+
+rectangle "Init" as t0 {
+  [Set up precise timer0\nSet up ntp update timer1\nSet up ntp\nInit last_ntp_received_ts and updated_ts\nStart timers]
+}
+
+rectangle "NTP request" as ntp {
+  [last_ntp_received = ntp\nupdated_ts = ntp\nreset timer0]
+}
+
+rectangle "Timestamp update" as up {
+  [update_ts += timer\ntimer0 reset]
+}
+
+rectangle "Idle" as id
+
+(t0) ==> (ntp)
+(ntp) ..> (id)
+(id) ==> (ntp): timer1
+(id) ==> (up): timer0
+(up) ..> (id)
+(id) ==> (up): request ts
+-->
+![Kroki generated PlantUML](https://kroki.io/plantuml/svg/eNptkMFqwzAMhu9-CtFTy6C4hV0GGezYSxkst2UEUWvBxDGepewy9u5zYrfNul1k_l_SJ1ncWx8w4gARfc8UYK8VX0wTLOz29wsn4KnHjmorjp6c7fxAXsDRuygV6SToO0ewOngrK0AG0fClAF5fSGAMEFKNZQKxA0Xd-GJ7CekxKCWzW2YaP9HAIUubZJsQZD_JtMKA3pTGSaYuwSiZwW_q-9dOx_oZIn2MxHm1aei82x8yVHnulXx2IjEVvr7l18llweH8lXnIWGZkayLdVbm_8RkDM_MWdjAuA6xRai16A1X1COu0xEbNEbbbpK1JMoVr9qFccGGPF1erSfzXOteU64DwDw_pszw=)
+
+* NTP provides timestamp in seconds since 1 Jan 1970:
+```
+struct sntp_time {
+    uint64_t seconds;
+    uint32_t fraction;
+}
+```
+A value of fraction = N corresponds to N/(2^32) seconds.
+The minimal possible value, 1/(2^32) is about 2ns.
+NTP is described [here](https://tickelton.gitlab.io/articles/ntp-timestamps/).
+
+* OSC requires timestamps in seconds since 1 Jan 1900
+Time tags are represented by a 64 bit fixed point number.
+  * The first 32 bits specify the number of seconds since midnight on January 1, 1900
+  * The last 32 bits specify fractional parts of a second, to a precision of about 200 picoseconds.
+OSC is described [here](https://opensoundcontrol.stanford.edu/spec-1_0.html#timetags)
+
+Reference samples:
+* NTP:
+```
+samples/net/sockets/sntp_client
+```
+* Clock skew:
+```
+samples/boards/nordic/clock_skew
+```
+
 ### Documentation
 
 A minimal documentation setup is provided for Doxygen and Sphinx. To build the
