@@ -304,6 +304,13 @@ Once you have built the application, run the following command to flash it:
 west flash
 ```
 
+In order to use a different debug probe than the BlackMagicProbe, use the
+runner command switch.
+
+```shell
+west flash --runner=stm32cubeprogrammer
+```
+
 ### Emulation
 
 This project supports emulation.
