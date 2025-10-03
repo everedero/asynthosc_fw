@@ -200,6 +200,7 @@ zephyr_udc0: &usbotg_fs {
 			 &eth_txd1_pb13>;
 	pinctrl-names = "default";
 	local-mac-address = [00 00 00 77 77 77];
+	phy-handle = <&ethernetphy>;
 };
 
 &mdio { //mdio is a child of &mac
@@ -253,7 +254,8 @@ zephyr_udc0: &usbotg_fs {
 
 	w25q32jvss: qspi-nor-flash@90000000 {
 		compatible = "st,stm32-qspi-nor";
-		reg = <0x90000000 DT_SIZE_M(4)>; /* 32 Mbits */
+		reg = <0x90000000>;
+		size = <DT_SIZE_M(4)>; /* 32 Mbits */
 		qspi-max-frequency = <8000000>;
 		status = "okay";
 		spi-bus-width = <4>;
