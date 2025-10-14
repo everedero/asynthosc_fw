@@ -200,7 +200,7 @@ zephyr_udc0: &usbotg_fs {
 			 &eth_txd1_pb13>;
 	pinctrl-names = "default";
 	local-mac-address = [00 00 00 77 77 77];
-	phy-handle = <&ethernetphy>;
+	phy-handle = <&eth_phy>;
 };
 
 &mdio { //mdio is a child of &mac
@@ -208,11 +208,11 @@ zephyr_udc0: &usbotg_fs {
 	pinctrl-0 = <&eth_mdio_pa2 &eth_mdc_pc1>;
 	pinctrl-names = "default";
 
-	ethernetphy: ethernet-phy@0 {
+	eth_phy: ethernet-phy@0 {
 		compatible = "ethernet-phy";
 		reg = <0x0>;
 		status = "okay";
-		//no-reset;
+		no-reset;
 		// LAN8742A in mode 111: negociation enabled, don’t use fixed-link
 		//ID = <0x07C130>;
 	};
