@@ -18,7 +18,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(sample_usb_midi, LOG_LEVEL_INF);
 
-#define MIDI_NODE DT_NODELABEL(midi)
+#define SERIAL_NODE DT_NODELABEL(midi)
 #define MSG_SIZE 32
 
 static const struct device *const usbmidi = DEVICE_DT_GET(DT_NODELABEL(usb_midi));
@@ -28,7 +28,7 @@ static struct gpio_dt_spec led = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led0), gpios, {0})
 /* queue to store up to 10 messages (aligned to 4-byte boundary) */
 K_MSGQ_DEFINE(uart_msgq, MSG_SIZE, 10, 4);
 
-static const struct device *const uart_midi_dev = DEVICE_DT_GET(MIDI_NODE);
+static const struct device *const uart_midi_dev = DEVICE_DT_GET(SERIAL_NODE);
 
 /* receive buffer used in UART ISR callback */
 static char rx_buf[MSG_SIZE];
