@@ -106,9 +106,9 @@ static void netmidi2_callback(struct netmidi2_session *session,
 			      const struct midi_ump ump)
 {
 	switch (UMP_MT(ump)) {
-	case UMP_MT_MIDI1_CHANNEL_VOICE:
+/*	case UMP_MT_MIDI1_CHANNEL_VOICE:
 		send_external_midi1(ump);
-		break;
+		break;*/
 	case UMP_MT_UMP_STREAM:
 		handle_ump_stream(session, ump);
 		break;
@@ -243,6 +243,7 @@ int main(void)
 			ump = UMP_MIDI1_CHANNEL_VOICE((tx_buf[0] & 0x0f), (tx_buf[0] & 0xf0) >> 4,
 					0, tx_buf[1], tx_buf[2]);
 			// SEND MIDI
+	netmidi2_send(struct netmidi2_session *sess, const struct midi_ump ump)
 		}
 	}
 	return 0;
