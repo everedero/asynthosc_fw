@@ -146,9 +146,7 @@ static int send_udp_data(struct sample_data *data)
 {
 	int ret;
 
-	LOG_DBG("Toto");
 	tx_len = create_msg(tx_buffer, tx_buf_len);
-	LOG_HEXDUMP_WRN(tx_buffer, tx_len, "Tx buf:");
 	data->udp.expecting = tx_len;
 
 	ret = send(data->udp.sock, tx_buffer, data->udp.expecting, 0);
