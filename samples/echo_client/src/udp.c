@@ -21,9 +21,15 @@ LOG_MODULE_DECLARE(net_echo_client_sample, LOG_LEVEL_DBG);
 #include "common.h"
 #include "ca_certificate.h"
 
+#include "create_osc_pack.h"
+
 #define RECV_BUF_SIZE 1280
 #define UDP_SLEEP K_MSEC(150)
 #define UDP_WAIT K_SECONDS(10)
+
+static char tx_buffer[2048]; // declare a 2Kb buffer to read packet data into
+static const int tx_buf_len = sizeof(tx_buffer) - 1;
+static int tx_len = 0;
 
 static APP_BMEM char recv_buf[RECV_BUF_SIZE];
 
@@ -140,12 +146,12 @@ static int send_udp_data(struct sample_data *data)
 {
 	int ret;
 
-	do {
-		data->udp.expecting = sys_rand32_get() % ipsum_len;
-	} while (data->udp.expecting == 0U ||
-		 data->udp.expecting > data->udp.mtu);
+	LOG_DBG("Toto");
+	tx_len = create_msg(tx_buffer, tx_buf_len);
+	LOG_HEXDUMP_WRN(tx_buffer, tx_len, "Tx buf:");
+	data->udp.expecting = tx_len;
 
-	ret = send(data->udp.sock, lorem_ipsum, data->udp.expecting, 0);
+	ret = send(data->udp.sock, tx_buffer, data->udp.expecting, 0);
 
 	if (PRINT_PROGRESS) {
 		LOG_DBG("%s UDP: Sent %d bytes", data->proto, data->udp.expecting);
@@ -163,7 +169,8 @@ static int compare_udp_data(struct sample_data *data, const char *buf, uint32_t 
 		return -EIO;
 	}
 
-	if (memcmp(buf, lorem_ipsum, received) != 0) {
+	read_msg(tx_buffer, tx_len);
+	if (memcmp(buf, tx_buffer, received) != 0) {
 		LOG_ERR("Invalid data received: UDP %s", data->proto);
 		return -EIO;
 	}

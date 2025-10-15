@@ -20,6 +20,7 @@ endif()
 
 target_sources(                     app PRIVATE src/echo-client.c)
 target_sources_ifdef(CONFIG_NET_UDP app PRIVATE src/udp.c)
+target_sources_ifdef(CONFIG_NET_UDP app PRIVATE src/create_osc_pack.c)
 target_sources_ifdef(CONFIG_NET_TCP app PRIVATE src/tcp.c)
 
 include(${ZEPHYR_BASE}/samples/net/common/common.cmake)
