@@ -171,11 +171,10 @@ tosc_message *tosc_reset(tosc_message *o) {
 }
 
 void tosc_writeBundle(tosc_bundle *b, uint64_t timetag, char *buffer, const int len) {
-  int i;
-  for (i=0; i<8; i++) {
-      buffer[i] = ((BUNDLE_ID & (0xFF << (8 * i))) >> 8 * i);
-      buffer[i + 8] = ((timetag & (0xFF << (8 * i))) >> 8 * i);
-  }
+  uint64_t bundle = htonll(BUNDLE_ID);
+  uint64_t ttag = htonll(timetag);
+  tosc_strncpy(buffer, &bundle, 8);
+  tosc_strncpy(buffer+8, &ttag, 8);
 
   b->buffer = buffer;
   b->marker = buffer + 16;
