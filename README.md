@@ -250,56 +250,17 @@ The Zephyr debug UART is set up to be RX2 and TX2, and 115200 2N1.
 
 ## Software compilation
 
-Before getting started, make sure you have a proper Zephyr development
-environment. Follow the official
-[Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/getting_started/index.html).
+Please refer to the [project installation guide](here).
 
-Quick summary:
-
-* Install a venv and activate it
-* Then install west meta-tool:
-
-```
-pip3 install west
-```
-
-### Initialization
-
-The first step is to initialize the workspace folder (``my-workspace``) where
-the ``asynthosc-application`` and all Zephyr modules will be cloned. Run the following
-command:
-
-* Initialize my-workspace for the asynthosc-application (main branch)
-```shell
-west init -m https://github.com/everedero/asynthosc_fw --mr main my-workspace
-```
-* Update Zephyr modules
-```shell
-cd my-workspace
-west update
-```
-### Git key magic
-By default west configures the repository to be http identification, if you want
-to get back to ssh, you can do it with:
-```
-git config remote.origin.url git@github.com:everedero/asynthosc_fw.git
-```
-
-### Building and running
-
-To build the application, run the following command:
+The main application can be built with:
 
 ```shell
-cd asynthosc_fw
-west build -b asynthosc app
+west build -p always -b asynthosc asynthosc_fw/app
 ```
+"-p always" tells the build to clean before build, "-b asynthosc" instructs to build for the
+Asynthosc PCB, and "asynthosc_fw/app" is the path of the folder containing the application.
 
-You can use the `asynthosc` board found in this
-repository. Note that Zephyr sample boards may be used if an
-appropriate overlay is provided (see `app/boards`).
-
-Once you have built the application, run the following command to flash it:
-
+Then to flash it on the board:
 ```shell
 west flash
 ```
@@ -338,7 +299,7 @@ west twister -T app --integration
 If it’s missing modules, maybe you forgot to activate the right virtual env?
 
 ```shell
-source ~/zephyrproject/.venv/bin/activate
+source my-project/.venv/bin/activate
 ```
 
 In order to test the library in details:
