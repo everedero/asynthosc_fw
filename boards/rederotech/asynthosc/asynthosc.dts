@@ -56,8 +56,18 @@
 		};
 		rot_button: button_2 {
 			label = "User";
-			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
+			gpios = <&gpioa 8 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 			zephyr,code = <INPUT_KEY_ENTER>;
+		};
+		trigger_1: trigger_0 {
+			label = "Trigger1";
+			gpios = <&gpioe 13 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		trigger_2: trigger_1 {
+			label = "Trigger2";
+			gpios = <&gpioe 14 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_1>;
 		};
 	};
 
@@ -71,6 +81,13 @@
 		 sample-time-us = <2000>;
 		 idle-timeout-ms = <200>;
 	 };
+
+	zephyr,user {
+		/* ADC scan order indexes as consumed by app/src/main.c */
+		cv-channel-ids = <16 19 3 15>;
+		/* ADC index -> UI and OSC CV index remap */
+		cv-display-remap = <0 2 3 1>;
+	};
 
 	aliases {
 		led0 = &debug_led;
@@ -155,7 +172,7 @@ zephyr_udc0: &usbotg_fs {
 };
 
 &timers1 {
-	status = "okay";
+	status = "disabled";
 	//pinctrl-0 = <&tim1_ch3_pe13 &tim1_ch4_pe14>;
 };
 
@@ -212,7 +229,7 @@ zephyr_udc0: &usbotg_fs {
 		compatible = "ethernet-phy";
 		reg = <0x0>;
 		status = "okay";
-		//no-reset;
+		no-reset;
 		// LAN8742A in mode 111: negociation enabled, don’t use fixed-link
 		//ID = <0x07C130>;
 	};
@@ -255,7 +272,7 @@ zephyr_udc0: &usbotg_fs {
 	w25q32jvss: qspi-nor-flash@90000000 {
 		compatible = "st,stm32-qspi-nor";
 		reg = <0x90000000>;
-		size = <DT_SIZE_M(4)>; /* 32 Mbits */
+		size = <DT_SIZE_M(32)>; /* 32 Mbits (size property is in bits for this binding) */
 		qspi-max-frequency = <8000000>;
 		status = "okay";
 		spi-bus-width = <4>;
@@ -265,6 +282,10 @@ zephyr_udc0: &usbotg_fs {
 };
 
 &backup_sram {
+	status = "okay";
+};
+
+&sram3 {
 	status = "okay";
 };
 
@@ -281,28 +302,28 @@ zephyr_udc0: &usbotg_fs {
 			read-only;
 		};
 
-		/* storage: 128KB for settings */
+		/* storage: 256KB for settings */
 		storage_partition: partition@20000 {
 			label = "storage";
-			reg = <0x00020000 DT_SIZE_K(128)>;
+			reg = <0x00020000 DT_SIZE_K(256)>;
 		};
 
 		/* application image slot: 256KB */
-		slot0_partition: partition@40000 {
+		slot0_partition: partition@60000 {
 			label = "image-0";
-			reg = <0x00040000 DT_SIZE_K(256)>;
+			reg = <0x00060000 DT_SIZE_K(256)>;
 		};
 
 		/* backup slot: 256KB */
-		slot1_partition: partition@80000 {
+		slot1_partition: partition@a0000 {
 			label = "image-1";
-			reg = <0x00080000 DT_SIZE_K(256)>;
+			reg = <0x000a0000 DT_SIZE_K(256)>;
 		};
 
 		/* swap slot: 128KB */
-		scratch_partition: partition@c0000 {
+		scratch_partition: partition@e0000 {
 			label = "image-scratch";
-			reg = <0x000c0000 DT_SIZE_K(128)>;
+			reg = <0x000e0000 DT_SIZE_K(128)>;
 		};
 
 	};

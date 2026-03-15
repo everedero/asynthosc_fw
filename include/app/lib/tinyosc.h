@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <strings.h>
+#include <stdint.h>
 
 #define TINYOSC_TIMETAG_IMMEDIATELY 1L
 
