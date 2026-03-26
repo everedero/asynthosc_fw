@@ -1,3 +1,7 @@
+/*
+ * Asynth UI helpers (buttons, encoder).
+ */
+
 #include <app/asynth_ui.h>
 
 #include <zephyr/irq.h>

@@ -64,7 +64,7 @@ const struct device *oled;
 #define CUE_PENDING_TIMEOUT_MS 5000U
 #define CUE_PENDING_BLINK_INTERVAL_MS 300U
 
-#define TRIGGER_EVENT_LOG_ENABLE         1U
+#define TRIGGER_EVENT_LOG_ENABLE         0U
 #define BUTTON_EVENT_LOG_ENABLE          0U
 
 #if TRIGGER_EVENT_LOG_ENABLE
@@ -117,6 +117,8 @@ const struct device *oled;
 
 #define ADC_SETTINGS_KEY_SAMPLE_PERIOD_MS    "asynth/adc/sample_period_ms"
 #define ADC_SETTINGS_KEY_HYSTERESIS_PERMILLE "asynth/adc/hysteresis_permille"
+
+#define CUE_SETTINGS_KEY_CURRENT_VALUE       "asynth/cue/current_value"
 
 enum app_mode {
 	APP_MODE_NORMAL = 0,
@@ -639,6 +641,10 @@ static int asynth_settings_set(const char *name, size_t len, settings_read_cb re
 		return net_settings_read_u16(len, read_cb, cb_arg, &net_cfg.ip_b3);
 	}
 
+	if (settings_name_steq(name, "cue/current_value", &next) && !next) {
+		return net_settings_read_u16(len, read_cb, cb_arg, &current_cue_value);
+	}
+
 	return -ENOENT;
 }
 
@@ -955,17 +961,12 @@ static void cue_send_recall(uint16_t cue_value)
 	/* Dedicated hook for future cue-recall side effects (OSC, etc.). */
 }
 
-static void cue_print_blank(void)
-{
-	asynth_display_clear_cue();
-}
-
 static void printTempCueBlink(uint16_t cue_value, bool visible)
 {
 	if (visible) {
 		asynth_display_print_cue(cue_value);
 	} else {
-		cue_print_blank();
+		asynth_display_clear_cue();
 	}
 }
 
@@ -991,6 +992,13 @@ static void cue_pending_commit_or_recall(void)
 		cue_pending_active = false;
 		cue_pending_visible = true;
 		asynth_display_print_cue(current_cue_value);
+
+		if (net_settings_ready) {
+			int ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE, &current_cue_value, sizeof(current_cue_value));
+			if (ret < 0) {
+				printk("CUE: save failed (%d)\n", ret);
+			}
+		}
 	}
 
 	cue_send_recall(current_cue_value);
@@ -1188,6 +1196,13 @@ static void cue_apply_edit_step(int8_t direction)
 			current_cue_value = 999U;
 		} else {
 			current_cue_value--;
+		}
+	}
+
+	if (net_settings_ready) {
+		int ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE, &current_cue_value, sizeof(current_cue_value));
+		if (ret < 0) {
+			printk("CUE: save failed (%d)\n", ret);
 		}
 	}
 
@@ -1590,9 +1605,9 @@ int main(void)
 				asynth_cv_refresh_bars();
 			}
 
-			if (current_mode == APP_MODE_NORMAL && !cue_pending_active) {
-				asynth_display_print_cue(current_cue_value);
-			}
+			//if (current_mode == APP_MODE_NORMAL && !cue_pending_active) {
+			//	asynth_display_print_cue(current_cue_value);
+			//}
 
 			ui_dirty = true;
 			next_cv_sample_ms = k_uptime_get() + cv_sample_period_ms;
