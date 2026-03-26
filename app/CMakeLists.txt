@@ -35,10 +35,12 @@ endif()
 
 target_sources(app PRIVATE
 	src/main.c
-	src/osc_schema.c
+	src/asynth_cv.c
+	src/asynth_midi.c
+	src/asynth_osc_bridge.c
+	src/asynth_display.c
+	src/asynth_ui.c
 )
 
 target_compile_definitions(app PRIVATE ASYNTH_BUILD_ID="${ASYNTH_BUILD_ID}")
 
-# Keep OSC transport code opt-in while validating ADC/OLED path.
-target_sources_ifdef(CONFIG_NETWORKING app PRIVATE src/osc_out.c)

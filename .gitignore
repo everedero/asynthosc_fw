@@ -1,5 +1,6 @@
 # editors
 .vscode
+.vs
 *.swp
 *~
 
@@ -9,6 +10,10 @@
 # build
 /build*
 /twister-out*
+/out/
+
+# local tooling
+smartftp.json
 
 __pycache__/
 

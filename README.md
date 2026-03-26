@@ -13,6 +13,11 @@ The [manifest](west.yml) is used the select the compatible Zephyr version.
 Note: do not "git clone" this project, see installation instructions to run
 "west init" in order to initialize the project.
 
+## Session guide
+
+For a single-entry startup document with quick commands and a full documentation
+index, see [PROJECT_SESSION.md](PROJECT_SESSION.md).
+
 ## Probe connection
 
 ### Connect ST-Link
@@ -255,14 +260,19 @@ Please refer to the [project installation guide](INSTALL.md).
 The main application can be built with:
 
 ```shell
-west build -p always -b asynthosc asynthosc_fw/app
+cd C:\Users\Mathieu\asynthosc\my-workspace
+python -m west build -p always -b asynthosc asynthosc_fw/app
 ```
-"-p always" tells the build to clean before build, "-b asynthosc" instructs to build for the
-Asynthosc PCB, and "asynthosc_fw/app" is the path of the folder containing the application.
+"-p always" tells the build to clean before build and "-b asynthosc" instructs to build for the
+Asynthosc PCB. Building from workspace root keeps all generated files in `my-workspace/build`.
+
+Only one Zephyr source tree is active for this project: `my-workspace/zephyr`.
+`asynthosc_fw/zephyr/module.yml` is module metadata, not a second Zephyr source tree.
 
 Then to flash it on the board:
 ```shell
-west flash
+cd C:\Users\Mathieu\asynthosc\my-workspace
+python -m west flash --skip-rebuild --build-dir build --runner blackmagicprobe -- --gdb-serial COM3
 ```
 
 In order to use a different debug probe than the BlackMagicProbe, use the
@@ -288,6 +298,19 @@ Then, execute:
 ./build/zephyr/zephyr.exe -display_zoom_pct=200
 ```
 
+### Devicetree Notes (Buttons And CV Mapping)
+
+Current DTS behavior used by `app/src/main.c`:
+
+- Buttons are active-low:
+    - `right_button`: `PD3`, `GPIO_ACTIVE_LOW`
+    - `left_button`: `PD12`, `GPIO_ACTIVE_LOW`
+    - `rot_button`: `PA8`, `GPIO_ACTIVE_LOW | GPIO_PULL_UP`
+- `/zephyr,user` CV properties:
+    - `cv-channel-ids = <16 19 3 15>` defines ADC scan order consumed by firmware.
+    - `cv-display-remap = <0 2 3 1>` maps ADC index to both UI bar position and OSC CV index.
+- `cv-osc-remap` is no longer used by the application path.
+
 ### Testing
 
 To execute Twister application tests, run the following command:
@@ -298,8 +321,17 @@ west twister -T app --integration
 
 If it’s missing modules, maybe you forgot to activate the right virtual env?
 
+Windows PowerShell (canonical workspace):
+
+```powershell
+cd C:\Users\Mathieu\asynthosc\my-workspace
+& ".\.venv\Scripts\Activate.ps1"
+```
+
+Linux/macOS equivalent:
+
 ```shell
-source my-project/.venv/bin/activate
+source ../.venv/bin/activate
 ```
 
 In order to test the library in details:
@@ -331,9 +363,9 @@ Don’t forget to add more tests in tests/lib/tinyosc/src/main.c!
 
 It means we don’t need an FTDI
 
-    cd ~/zephyrproject/zephyr/samples/subsys/shell
+    cd C:\Users\Mathieu\asynthosc\my-workspace\zephyr\samples\subsys\shell
 
-    west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
+    C:\Users\Mathieu\asynthosc\my-workspace\.venv\Scripts\python.exe -m west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
 
 ### Timestamp retrieve
 To be implemented.

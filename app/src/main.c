@@ -10,12 +10,18 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/util.h>
-#include <app/osc_schema.h>
+#include <app/asynth_cv.h>
+#include <app/asynth_display.h>
+#include <app/asynth_midi.h>
+#include <app/asynth_osc_bridge.h>
+#include <app/asynth_ui.h>
 #if defined(CONFIG_NETWORKING)
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/net_event.h>
 #include <zephyr/net/net_ip.h>
+#include <zephyr/net/socket.h>
+#include <app/lib/tinyosc.h>
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -58,16 +64,8 @@ const struct device *oled;
 #define CUE_PENDING_TIMEOUT_MS 5000U
 #define CUE_PENDING_BLINK_INTERVAL_MS 300U
 
-#define UI_STATUS_MSG_VISIBLE_CHARS      5U
-#define UI_STATUS_MSG_MAX_LEN            64U
-#define UI_STATUS_MSG_SCROLL_GAP         3U
-#define UI_STATUS_MSG_SCROLL_INTERVAL_MS 180U
-
-#define TRIGGER_BLINK_DURATION_MS        100U
 #define TRIGGER_EVENT_LOG_ENABLE         1U
 #define BUTTON_EVENT_LOG_ENABLE          0U
-
-#define CV_CONFIG_NODE DT_PATH(zephyr_user)
 
 #if TRIGGER_EVENT_LOG_ENABLE
 #define TRIGGER_EVENT_LOG(...) printk(__VA_ARGS__)
@@ -160,38 +158,10 @@ static struct settings_handler asynth_settings_handler = {
 	.h_set = asynth_settings_set,
 };
 
-#if !DT_NODE_EXISTS(CV_CONFIG_NODE)
-#error "Missing devicetree node /zephyr,user"
-#endif
-
-BUILD_ASSERT(DT_NODE_HAS_PROP(CV_CONFIG_NODE, cv_channel_ids),
-	     "Missing /zephyr,user cv-channel-ids");
-BUILD_ASSERT(DT_NODE_HAS_PROP(CV_CONFIG_NODE, cv_display_remap),
-	     "Missing /zephyr,user cv-display-remap");
-BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_channel_ids) == CV_CHANNEL_COUNT,
-	     "cv-channel-ids length must match CV_CHANNEL_COUNT");
-BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_display_remap) == CV_CHANNEL_COUNT,
-	     "cv-display-remap length must match CV_CHANNEL_COUNT");
-
-#define CV_CHANNEL_ID_FROM_DTS(idx, _) DT_PROP_BY_IDX(CV_CONFIG_NODE, cv_channel_ids, idx)
-#define CV_DISPLAY_REMAP_FROM_DTS(idx, _) DT_PROP_BY_IDX(CV_CONFIG_NODE, cv_display_remap, idx)
-
-static const uint8_t cv_adc_channel_ids[CV_CHANNEL_COUNT] = {
-	LISTIFY(CV_CHANNEL_COUNT, CV_CHANNEL_ID_FROM_DTS, (,))
-};
-/* ADC index -> UI and OSC CV index remap. */
-static const uint8_t cv_display_remap[CV_CHANNEL_COUNT] = {
-	LISTIFY(CV_CHANNEL_COUNT, CV_DISPLAY_REMAP_FROM_DTS, (,))
-};
-static const struct device *cv_adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc1));
-
 /* Global CV settings (to be replaced by menu/settings later). */
 static uint32_t cv_sample_period_ms = CV_SAMPLE_PERIOD_DEFAULT_MS;
 static uint16_t cv_hysteresis_permille = CV_HYSTERESIS_DEFAULT_PERMILLE;
 static float cv_hysteresis_norm = 0.01f;
-static float cv_adc_full_scale_volts = 3.3f;
-static float cv_adc_calib_min_volts = 0.0f;
-static float cv_adc_calib_max_volts = 3.3f;
 static uint16_t current_cue_value = 0U;
 static bool cue_pending_active;
 static bool cue_pending_visible = true;
@@ -212,44 +182,6 @@ static struct net_menu_settings net_cfg = {
 static bool net_settings_handler_registered;
 static bool net_settings_ready;
 
-static int16_t cv_raw_samples[CV_CHANNEL_COUNT];
-static float cv_norm_values[CV_CHANNEL_COUNT] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static float cv_prev_sent_values[CV_CHANNEL_COUNT] = { -1.0f, -1.0f, -1.0f, -1.0f };
-
-static struct adc_sequence cv_adc_sequence = {
-	.buffer = cv_raw_samples,
-	.buffer_size = sizeof(cv_raw_samples),
-	.resolution = CV_ADC_RESOLUTION,
-	.channels = 0U,
-};
-
-static struct gpio_callback left_button_cb_data;
-static struct gpio_callback right_button_cb_data;
-static struct gpio_callback rot_button_cb_data;
-static struct gpio_callback rot_encoder_b_cb_data;
-
-static volatile bool left_button_pressed;
-static volatile bool left_button_changed;
-static volatile uint32_t left_button_last_irq_ms;
-
-static volatile bool right_button_pressed;
-static volatile bool right_button_changed;
-static volatile uint32_t right_button_last_irq_ms;
-
-static volatile bool rot_button_pressed;
-static volatile bool rot_button_changed;
-static volatile uint32_t rot_button_last_irq_ms;
-static volatile int8_t rot_encoder_delta;
-static volatile uint8_t rot_encoder_prev_state;
-
-static volatile bool trigger_1_active;
-static volatile bool trigger_2_active;
-static volatile uint32_t trigger_1_blink_end_ms;
-static volatile uint32_t trigger_2_blink_end_ms;
-static volatile bool midi_active;
-static volatile bool audio_active;
-static volatile uint32_t midi_blink_end_ms;
-static volatile uint32_t audio_blink_end_ms;
 static bool trigger_1_prev_state;
 static bool trigger_2_prev_state;
 
@@ -258,16 +190,7 @@ static uint8_t current_menu_item = MENU_ITEM_SAMPLE_PERIOD;
 static uint32_t rot_press_start_ms;
 static bool rot_press_tracking;
 static bool rot_button_was_pressed_last_poll;
-static bool rot_button_debounced_pressed;
-static bool rot_button_raw_pressed_prev;
-static uint32_t rot_button_last_raw_change_ms;
-static bool rot_button_state_initialized;
 static int8_t rot_encoder_step_accum;
-
-static char ui_status_msg[UI_STATUS_MSG_MAX_LEN + 1] = "";
-static size_t ui_status_msg_len;
-static size_t ui_status_msg_offset;
-static int64_t ui_status_msg_next_scroll_ms;
 
 #if defined(CONFIG_NETWORKING)
 #define APP_NET_EVENT_MASK (NET_EVENT_IF_UP | NET_EVENT_IF_DOWN | \
@@ -275,6 +198,63 @@ static int64_t ui_status_msg_next_scroll_ms;
 			    NET_EVENT_IPV4_ADDR_ADD | NET_EVENT_IPV4_ADDR_DEL)
 
 static struct net_mgmt_event_callback app_net_mgmt_cb;
+static int app_osc_sock_fd = -1;
+static struct sockaddr_in app_osc_remote_addr;
+static bool app_osc_remote_addr_ready;
+
+static uint16_t app_osc_target_port(void)
+{
+	return (uint16_t)(NET_SETTINGS_PORT_BASE + net_cfg.target_port);
+}
+
+static int app_osc_update_remote_addr(void)
+{
+	char ip_str[16];
+	uint16_t port = app_osc_target_port();
+	int ret;
+
+	snprintk(ip_str, sizeof(ip_str), "%u.%u.%u.%u",
+		 (unsigned int)net_cfg.ip_b1,
+		 (unsigned int)net_cfg.ip_b2,
+		 (unsigned int)net_cfg.ip_b3,
+		 (unsigned int)net_cfg.target_ip4);
+
+	memset(&app_osc_remote_addr, 0, sizeof(app_osc_remote_addr));
+	app_osc_remote_addr.sin_family = AF_INET;
+	app_osc_remote_addr.sin_port = htons(port);
+
+	ret = zsock_inet_pton(AF_INET, ip_str, &app_osc_remote_addr.sin_addr);
+	if (ret != 1) {
+		printk("OSC: invalid target IP %s\n", ip_str);
+		app_osc_remote_addr_ready = false;
+		return -EINVAL;
+	}
+
+	app_osc_remote_addr_ready = true;
+	return 0;
+}
+
+static int app_osc_ensure_socket_and_target(void)
+{
+	int ret;
+
+	if (app_osc_sock_fd < 0) {
+		app_osc_sock_fd = zsock_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (app_osc_sock_fd < 0) {
+			printk("OSC: socket create failed (errno=%d)\n", errno);
+			return -errno;
+		}
+	}
+
+	if (!app_osc_remote_addr_ready) {
+		ret = app_osc_update_remote_addr();
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
+	return 0;
+}
 
 static void app_print_ipv4_status(struct net_if *iface)
 {
@@ -377,6 +357,99 @@ static int app_network_init(void)
 	app_print_ipv4_status(iface);
 
 	return 0;
+}
+
+static int app_osc_transport_send_cv(uint8_t cv_index, float normalized)
+{
+	char path[20];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (cv_index >= CV_CHANNEL_COUNT) {
+		return -EINVAL;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	snprintk(path, sizeof(path), "/asynth/cv%u", (unsigned int)(cv_index + 1U));
+	len = tosc_writeMessage(packet, sizeof(packet), path, "f", (double)normalized);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
+{
+	char path[24];
+	char packet[128];
+	int len;
+	int ret;
+	int32_t value;
+
+	if (trigger_index > 1U) {
+		return -EINVAL;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	value = active ? 1 : 0;
+	snprintk(path, sizeof(path), "/asynth/trigger%u", (unsigned int)(trigger_index + 1U));
+	len = tosc_writeMessage(packet, sizeof(packet), path, "i", value);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static void app_osc_transport_configure(void)
+{
+	const struct asynth_osc_transport_ops ops = {
+		.send_cv = app_osc_transport_send_cv,
+		.send_trigger = app_osc_transport_send_trigger,
+	};
+
+	asynth_osc_set_transport_ops(&ops);
+	app_osc_remote_addr_ready = false;
+	asynth_osc_set_transport_enabled(true);
+	printk("OSC: bridge transport callbacks enabled (UDP)\n");
+}
+#endif
+
+#if !defined(CONFIG_NETWORKING)
+static void app_osc_transport_configure(void)
+{
+	asynth_osc_set_transport_ops(NULL);
+	asynth_osc_set_transport_enabled(false);
 }
 #endif
 
@@ -673,7 +746,6 @@ static void net_settings_save_and_report(const char *key, const char *label, uin
 			printk("NETCFG: save failed for %s (%d)\n", label, ret);
 		}
 	}
-
 	printk("NETCFG: %s=%u\n", label, (unsigned int)value);
 	net_settings_log_current("menu");
 }
@@ -693,227 +765,6 @@ static void adc_settings_save_and_report(const char *key, const char *label, uin
 	adc_settings_log_current("menu");
 }
 
-static float clampf(float value, float min_val, float max_val)
-{
-	if (value < min_val) {
-		return min_val;
-	}
-	if (value > max_val) {
-		return max_val;
-	}
-	return value;
-}
-
-static float cv_raw_to_voltage(int16_t raw)
-{
-	int32_t safe_raw = raw;
-
-	if (safe_raw < 0) {
-		safe_raw = 0;
-	}
-	if (safe_raw > (int32_t)CV_ADC_MAX_RAW) {
-		safe_raw = (int32_t)CV_ADC_MAX_RAW;
-	}
-
-	return ((float)safe_raw / (float)CV_ADC_MAX_RAW) * cv_adc_full_scale_volts;
-}
-
-static float cv_voltage_to_normalized(float voltage)
-{
-	float span = cv_adc_calib_max_volts - cv_adc_calib_min_volts;
-
-	if (span <= 0.0f) {
-		return 0.0f;
-	}
-
-	return clampf((voltage - cv_adc_calib_min_volts) / span, 0.0f, 1.0f);
-}
-
-static uint8_t cv_normalized_to_pixels(float normalized)
-{
-	float clamped = clampf(normalized, 0.0f, 1.0f);
-	float scaled = clamped * (float)CV_BAR_MAX_PIXELS;
-
-	return (uint8_t)(scaled + 0.5f);
-}
-
-static int osc_out_send_cv(uint8_t cv_index, float normalized)
-{
-	osc_msg_t msg;
-	const osc_msg_spec_t *spec;
-	int ret;
-
-	if (cv_index >= CV_CHANNEL_COUNT) {
-		return -EINVAL;
-	}
-
-	msg.id = (osc_msg_id_t)(OSC_CV1 + cv_index);
-	msg.value.f = normalized;
-
-	spec = osc_get_spec(msg.id);
-	if (!spec) {
-		return -ENOENT;
-	}
-	ARG_UNUSED(spec);
-
-	/*
-	 * UART CV monitoring is intentionally disabled for now.
-	 * Keep this quick debug snippet for future range checks:
-	 * int32_t milli = (int32_t)(normalized * 1000.0f);
-	 * printk("CV%d: %s = %d/1000\n", cv_index + 1, spec->path, milli);
-	 */
-
-	/* OSC transport is temporarily disabled while validating ADC/OLED path. */
-	ARG_UNUSED(msg);
-	ret = 0;
-
-	return ret;
-}
-
-static int osc_out_send_trigger(uint8_t trigger_index, bool active)
-{
-	osc_msg_t msg;
-	const osc_msg_spec_t *spec;
-	osc_msg_id_t msg_id;
-	int ret;
-
-	if (trigger_index > 1U) {
-		return -EINVAL;
-	}
-
-	msg_id = (trigger_index == 0U) ? OSC_TRIGGER1 : OSC_TRIGGER2;
-	msg.id = msg_id;
-	msg.value.i = active ? 1 : 0;
-
-	spec = osc_get_spec(msg.id);
-	if (!spec) {
-		return -ENOENT;
-	}
-
-	if (!osc_check_direction(msg.id, OSC_DIR_OUTPUT)) {
-		return -EPERM;
-	}
-
-	if (!osc_validate_value(msg.id, &msg.value)) {
-		return -ERANGE;
-	}
-
-	/* OSC transport is intentionally disabled for now. */
-	ARG_UNUSED(spec);
-	ARG_UNUSED(msg);
-	ret = 0;
-
-	return ret;
-}
-
-static int cv_validate_remap(const uint8_t *remap, const char *name)
-{
-	uint32_t seen = 0U;
-
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
-		if (remap[i] >= CV_CHANNEL_COUNT) {
-			printk("Invalid CV %s remap index %d -> %u\n",
-			       name, i, (unsigned int)remap[i]);
-			return -EINVAL;
-		}
-
-		if ((seen & BIT(remap[i])) != 0U) {
-			printk("Duplicate CV %s remap value at index %d -> %u\n",
-			       name, i, (unsigned int)remap[i]);
-			return -EINVAL;
-		}
-
-		seen |= BIT(remap[i]);
-	}
-
-	return 0;
-}
-
-static int cv_adc_init(void)
-{
-	struct adc_channel_cfg channel_cfg = {
-		.gain = ADC_GAIN_1,
-		.reference = ADC_REF_INTERNAL,
-		.acquisition_time = ADC_ACQ_TIME_DEFAULT,
-	};
-	int ret;
-
-	ret = cv_validate_remap(cv_display_remap, "display");
-	if (ret < 0) {
-		return ret;
-	}
-
-	if (!device_is_ready(cv_adc_dev)) {
-		printk("ADC device %s is not ready\n", cv_adc_dev->name);
-		return -ENODEV;
-	}
-
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
-		channel_cfg.channel_id = cv_adc_channel_ids[i];
-#if defined(CONFIG_ADC_CONFIGURABLE_INPUTS)
-		channel_cfg.input_positive = cv_adc_channel_ids[i];
-#endif
-		ret = adc_channel_setup(cv_adc_dev, &channel_cfg);
-		if (ret < 0) {
-			printk("Failed to setup ADC channel %d (%d)\n", cv_adc_channel_ids[i], ret);
-			return ret;
-		}
-		cv_adc_sequence.channels |= BIT(cv_adc_channel_ids[i]);
-	}
-
-	return 0;
-}
-
-static int cv_sample_and_process(void)
-{
-	int ret = adc_read(cv_adc_dev, &cv_adc_sequence);
-
-	if (ret < 0) {
-		printk("ADC read failed (%d)\n", ret);
-		return ret;
-	}
-
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
-		float voltage = cv_raw_to_voltage(cv_raw_samples[i]);
-		float normalized = cv_voltage_to_normalized(voltage);
-		float delta;
-
-		cv_norm_values[i] = normalized;
-
-		delta = normalized - cv_prev_sent_values[i];
-		if (delta < 0.0f) {
-			delta = -delta;
-		}
-
-		if (cv_prev_sent_values[i] < 0.0f || delta >= cv_hysteresis_norm) {
-			cv_prev_sent_values[i] = normalized;
-			uint8_t cv_osc_idx = cv_display_remap[i];
-			ret = osc_out_send_cv(cv_osc_idx, normalized);
-			if (ret < 0) {
-				printk("OSC send CV%d failed (%d)\n", cv_osc_idx + 1, ret);
-			}
-		}
-	}
-
-	return 0;
-}
-
-static void update_cv_bars(uint8_t cv_pixels[CV_CHANNEL_COUNT])
-{
-	for (int adc_idx = 0; adc_idx < CV_CHANNEL_COUNT; adc_idx++) {
-		uint8_t display_pos = cv_display_remap[adc_idx]; /* Which display position for this ADC index */
-		uint8_t new_pixels = cv_normalized_to_pixels(cv_norm_values[adc_idx]);
-
-		if (new_pixels == cv_pixels[display_pos]) {
-			continue;
-		}
-
-		/* Erase old level and draw new level using the existing invert workflow. */
-		cfb_invert_area(oled, 82 + display_pos * 12, 18, 7, 29 - cv_pixels[display_pos]);
-		cv_pixels[display_pos] = new_pixels;
-		cfb_invert_area(oled, 82 + display_pos * 12, 18, 7, 29 - cv_pixels[display_pos]);
-	}
-}
 
 /*
 * @brief Initialize led's GPIO
@@ -941,444 +792,10 @@ int init_led(struct gpio_dt_spec led1)
 
 	return ret;
 }
-/**
- * @brief Render the status line message area (always 5 characters wide).
- *
- * @return 0
- */
-static int printMsg_render_window(void)
-{
-	char window[UI_STATUS_MSG_VISIBLE_CHARS + 1];
-	size_t cycle_len;
-	size_t i;
-
-	memset(window, ' ', UI_STATUS_MSG_VISIBLE_CHARS);
-
-	if (ui_status_msg_len <= UI_STATUS_MSG_VISIBLE_CHARS) {
-		memcpy(window, ui_status_msg, ui_status_msg_len);
-	} else {
-		cycle_len = ui_status_msg_len + UI_STATUS_MSG_SCROLL_GAP;
-		for (i = 0U; i < UI_STATUS_MSG_VISIBLE_CHARS; i++) {
-			size_t idx = (ui_status_msg_offset + i) % cycle_len;
-
-			if (idx < ui_status_msg_len) {
-				window[i] = ui_status_msg[idx];
-			}
-		}
-	}
-
-	window[UI_STATUS_MSG_VISIBLE_CHARS] = '\0';
-	cfb_framebuffer_set_font(oled, 1);
-	cfb_set_kerning(oled, 0);
-	cfb_print(oled, window, 0, 28);
-	return 0;
-}
-
-/**
- * @brief Print a status message in a 5-char area with marquee scrolling for long strings.
- * oled device is set as global parameter
- *
- * @param msg: message to display (NULL-safe)
- * @return 0
- */
-int printMsg(const char *msg)
-{
-	char bounded_msg[UI_STATUS_MSG_MAX_LEN + 1];
-	size_t len = 0U;
-	bool changed;
-
-	if (msg == NULL) {
-		msg = "";
-	}
-
-	while ((len < UI_STATUS_MSG_MAX_LEN) && (msg[len] != '\0')) {
-		len++;
-	}
-
-	memcpy(bounded_msg, msg, len);
-	bounded_msg[len] = '\0';
-
-	changed = (strcmp(ui_status_msg, bounded_msg) != 0);
-	if (changed) {
-		memcpy(ui_status_msg, bounded_msg, len + 1U);
-		ui_status_msg_len = len;
-		ui_status_msg_offset = 0U;
-		ui_status_msg_next_scroll_ms = k_uptime_get() + UI_STATUS_MSG_SCROLL_INTERVAL_MS;
-	}
-
-	return printMsg_render_window();
-}
-
-static bool ui_tick_status_message_scroll(void)
-{
-	int64_t now_ms;
-	size_t cycle_len;
-
-	if (ui_status_msg_len <= UI_STATUS_MSG_VISIBLE_CHARS) {
-		return false;
-	}
-
-	now_ms = k_uptime_get();
-	if (now_ms < ui_status_msg_next_scroll_ms) {
-		return false;
-	}
-
-	cycle_len = ui_status_msg_len + UI_STATUS_MSG_SCROLL_GAP;
-	ui_status_msg_offset = (ui_status_msg_offset + 1U) % cycle_len;
-	ui_status_msg_next_scroll_ms = now_ms + UI_STATUS_MSG_SCROLL_INTERVAL_MS;
-	printMsg_render_window();
-	return true;
-}
-
-/**
- * @brief Print Cue number on a reserved place on oled screen (always 3 digits: 000..999).
- * oled device is set as global parameter
- *
- * @param cue: numeric cue value
- * @return 0
- */
-int printCue(uint32_t cue)
-{
-	char buffer[4];
-	uint32_t safe_cue = cue % 1000U;
-
-	snprintf(buffer, sizeof(buffer), "%03u", (unsigned int)safe_cue);
-	cfb_framebuffer_set_font(oled, 2);
-	cfb_set_kerning(oled, 0);
-	cfb_print(oled, buffer, 0, 0);
-	return 0;
-}
-
-/**
- * @brief Blink T1 trigger 1 input activity led on oled screen
- * 
- */
-void actT1()
-{
-	if (!oled || !device_is_ready(oled)) {
-		return;
-	}
-	cfb_invert_area(oled, 80, 0, 11, 14);
-	trigger_1_active = true;
-	trigger_1_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
-}
-/**
- * @brief Blink M MIDI input activity LED on OLED screen.
- *
- * Reserved for future implementation when MIDI input parsing is wired.
- *
- */
-void actM()
-{
-	if (!oled || !device_is_ready(oled)) {
-		return;
-	}
-	cfb_invert_area(oled, 92, 0, 11, 14);
-	midi_active = true;
-	midi_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
-}
-/**
- * @brief Blink A audio activity LED on OLED screen.
- *
- * Reserved for future implementation when DAC audio generation is wired.
- *
- */
-void actA()
-{
-	if (!oled || !device_is_ready(oled)) {
-		return;
-	}
-	cfb_invert_area(oled, 104, 0, 11, 14);
-	audio_active = true;
-	audio_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
-}
-/**
- * @brief Blink T2 trigger 2 input activity led on oled screen
- *
- */
-void actT2()
-{
-	if (!oled || !device_is_ready(oled)) {
-		return;
-	}
-	cfb_invert_area(oled, 116, 0, 11, 14);
-	trigger_2_active = true;
-	trigger_2_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
-}
-
-static bool gpio_level_is_pressed(const struct gpio_dt_spec *button, int gpio_level)
-{
-	bool active_low = (button->dt_flags & GPIO_ACTIVE_LOW) != 0U;
-
-	if (active_low) {
-		return gpio_level == 0;
-	}
-
-	return gpio_level != 0;
-}
-
-static int gpio_pin_get_raw_dt(const struct gpio_dt_spec *spec)
-{
-	return gpio_pin_get_raw(spec->port, spec->pin);
-}
-
-static void button_log_state(const char *name,
-			     const struct gpio_dt_spec *button,
-			     int gpio_level,
-			     bool pressed,
-			     const char *source)
-{
-#if BUTTON_EVENT_LOG_ENABLE
-	bool active_low = (button->dt_flags & GPIO_ACTIVE_LOW) != 0U;
-
-	BUTTON_EVENT_LOG("BTN %-5s %-4s raw=%d active_%s => %s\n",
-			 name,
-			 source,
-			 gpio_level,
-			 active_low ? "LOW" : "HIGH",
-			 pressed ? "PRESSED" : "RELEASED");
-#else
-	ARG_UNUSED(name);
-	ARG_UNUSED(button);
-	ARG_UNUSED(gpio_level);
-	ARG_UNUSED(pressed);
-	ARG_UNUSED(source);
-#endif
-}
-
-static void button_irq_update(const char *name,
-			      const struct gpio_dt_spec *button,
-			      volatile bool *pressed_state,
-			      volatile bool *changed_flag,
-			      volatile uint32_t *last_irq_ms)
-{
-	uint32_t now_ms = k_uptime_get_32();
-	int gpio_level;
-	bool new_pressed_state;
-
-	if ((uint32_t)(now_ms - *last_irq_ms) < BUTTON_DEBOUNCE_MS) {
-		return;
-	}
-
-	gpio_level = gpio_pin_get_raw_dt(button);
-	if (gpio_level < 0) {
-		return;
-	}
-
-	new_pressed_state = gpio_level_is_pressed(button, gpio_level);
-	if (new_pressed_state != *pressed_state) {
-		*pressed_state = new_pressed_state;
-		*changed_flag = true;
-		*last_irq_ms = now_ms;
-		button_log_state(name, button, gpio_level, new_pressed_state, "IRQ");
-	}
-}
-
-static void left_button_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
-{
-	ARG_UNUSED(port);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	button_irq_update("LEFT", &left_button, &left_button_pressed, &left_button_changed,
-			  &left_button_last_irq_ms);
-}
-
-static void right_button_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
-{
-	ARG_UNUSED(port);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	button_irq_update("RIGHT", &right_button, &right_button_pressed, &right_button_changed,
-			  &right_button_last_irq_ms);
-}
-
-static void rot_button_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
-{
-	ARG_UNUSED(port);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	button_irq_update("ROT", &rot_button, &rot_button_pressed, &rot_button_changed,
-			  &rot_button_last_irq_ms);
-}
-
-static int rotary_encoder_read_state(uint8_t *state_out)
-{
-	int level_a;
-	int level_b;
-	uint8_t state = 0U;
-
-	level_a = gpio_pin_get_raw_dt(&rot_encoder_a);
-	if (level_a < 0) {
-		return level_a;
-	}
-
-	level_b = gpio_pin_get_raw_dt(&rot_encoder_b);
-	if (level_b < 0) {
-		return level_b;
-	}
-
-	if (gpio_level_is_pressed(&rot_encoder_a, level_a)) {
-		state |= 0x2U;
-	}
-	if (gpio_level_is_pressed(&rot_encoder_b, level_b)) {
-		state |= 0x1U;
-	}
-
-	*state_out = state;
-	return 0;
-}
-
-static void rotary_encoder_irq_update(void)
-{
-	unsigned int key;
-	uint8_t old_state;
-	uint8_t old_b;
-	uint8_t new_b;
-	uint8_t a;
-	uint8_t new_state;
-	int16_t accum;
-	int ret;
-
-	ret = rotary_encoder_read_state(&new_state);
-	if (ret < 0) {
-		return;
-	}
-
-	key = irq_lock();
-	old_state = rot_encoder_prev_state;
-	old_b = old_state & 0x1U;
-	new_b = new_state & 0x1U;
-
-	if (new_b != old_b) {
-		a = (new_state >> 1) & 0x1U;
-		accum = (int16_t)rot_encoder_delta + ((a == new_b) ? -1 : 1);
-		if (accum > 32) {
-			accum = 32;
-		} else if (accum < -32) {
-			accum = -32;
-		}
-		rot_encoder_delta = (int8_t)accum;
-	}
-	rot_encoder_prev_state = new_state;
-	irq_unlock(key);
-}
-
-static void rot_encoder_b_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
-{
-	ARG_UNUSED(port);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	rotary_encoder_irq_update();
-}
-
-static int configure_button_interrupt(const struct gpio_dt_spec *button,
-			      struct gpio_callback *cb_data,
-			      gpio_callback_handler_t cb_handler)
-{
-	int ret;
-
-	if (!device_is_ready(button->port)) {
-		return -ENODEV;
-	}
-
-	ret = gpio_pin_configure_dt(button, GPIO_INPUT);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = gpio_pin_interrupt_configure_dt(button, GPIO_INT_EDGE_BOTH);
-	if (ret < 0) {
-		return ret;
-	}
-
-	gpio_init_callback(cb_data, cb_handler, BIT(button->pin));
-	ret = gpio_add_callback(button->port, cb_data);
-
-	return ret;
-}
-
-static int buttons_init(void)
+static int triggers_init(void)
 {
 	int ret;
 	int level;
-	uint8_t encoder_state = 0U;
-
-	ret = configure_button_interrupt(&left_button, &left_button_cb_data, left_button_cb);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = configure_button_interrupt(&right_button, &right_button_cb_data, right_button_cb);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = configure_button_interrupt(&rot_button, &rot_button_cb_data, rot_button_cb);
-	if (ret < 0) {
-		return ret;
-	}
-
-	if (!device_is_ready(rot_encoder_a.port) || !device_is_ready(rot_encoder_b.port)) {
-		return -ENODEV;
-	}
-
-	ret = gpio_pin_configure_dt(&rot_encoder_a, GPIO_INPUT);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = gpio_pin_configure_dt(&rot_encoder_b, GPIO_INPUT);
-	if (ret < 0) {
-		return ret;
-	}
-
-	/* Keep encoder IRQ on B (PD14) and poll triggers to avoid EXTI line conflicts. */
-	ret = gpio_pin_interrupt_configure_dt(&rot_encoder_b, GPIO_INT_EDGE_BOTH);
-	if (ret < 0) {
-		return ret;
-	}
-
-	gpio_init_callback(&rot_encoder_b_cb_data, rot_encoder_b_cb, BIT(rot_encoder_b.pin));
-	ret = gpio_add_callback(rot_encoder_b.port, &rot_encoder_b_cb_data);
-	if (ret < 0) {
-		return ret;
-	}
-
-	level = gpio_pin_get_raw_dt(&left_button);
-	if (level >= 0) {
-		left_button_pressed = gpio_level_is_pressed(&left_button, level);
-		button_log_state("LEFT", &left_button, level, left_button_pressed, "INIT");
-	}
-
-	level = gpio_pin_get_raw_dt(&right_button);
-	if (level >= 0) {
-		right_button_pressed = gpio_level_is_pressed(&right_button, level);
-		button_log_state("RIGHT", &right_button, level, right_button_pressed, "INIT");
-	}
-
-	level = gpio_pin_get_raw_dt(&rot_button);
-	rot_button_state_initialized = false;
-	rot_button_debounced_pressed = false;
-	rot_button_raw_pressed_prev = false;
-	rot_button_last_raw_change_ms = k_uptime_get_32();
-	rot_button_was_pressed_last_poll = false;
-	rot_press_tracking = false;
-	if (level >= 0) {
-		bool initial_rot_pressed = gpio_level_is_pressed(&rot_button, level);
-
-		rot_button_pressed = initial_rot_pressed;
-		rot_button_state_initialized = true;
-		rot_button_debounced_pressed = initial_rot_pressed;
-		rot_button_raw_pressed_prev = initial_rot_pressed;
-		rot_button_was_pressed_last_poll = initial_rot_pressed;
-		button_log_state("ROT", &rot_button, level, initial_rot_pressed, "INIT");
-	}
-
-	if (rotary_encoder_read_state(&encoder_state) == 0) {
-		rot_encoder_prev_state = encoder_state;
-	}
-	rot_encoder_delta = 0;
-	rot_encoder_step_accum = 0;
 
 	if (!device_is_ready(trigger_1.port) || !device_is_ready(trigger_2.port)) {
 		return -ENODEV;
@@ -1394,26 +811,17 @@ static int buttons_init(void)
 		return ret;
 	}
 
-	level = gpio_pin_get_raw_dt(&trigger_1);
+	level = asynth_ui_pin_get_raw_dt(&trigger_1);
 	if (level < 0) {
 		return level;
 	}
-	trigger_1_prev_state = gpio_level_is_pressed(&trigger_1, level);
+	trigger_1_prev_state = asynth_ui_level_is_pressed(&trigger_1, level);
 
-	level = gpio_pin_get_raw_dt(&trigger_2);
+	level = asynth_ui_pin_get_raw_dt(&trigger_2);
 	if (level < 0) {
 		return level;
 	}
-	trigger_2_prev_state = gpio_level_is_pressed(&trigger_2, level);
-
-	trigger_1_active = false;
-	trigger_2_active = false;
-	trigger_1_blink_end_ms = 0U;
-	trigger_2_blink_end_ms = 0U;
-	midi_active = false;
-	audio_active = false;
-	midi_blink_end_ms = 0U;
-	audio_blink_end_ms = 0U;
+	trigger_2_prev_state = asynth_ui_level_is_pressed(&trigger_2, level);
 
 	return 0;
 }
@@ -1437,60 +845,60 @@ static void ui_write_status_line(void)
 	if (current_mode == APP_MODE_MENU) {
 		switch (current_menu_item) {
 		case MENU_ITEM_SAMPLE_PERIOD:
-			printMsg("SR ms");
-			printCue(cv_sample_period_ms);
+			asynth_display_print_msg("SR ms");
+			asynth_display_print_cue(cv_sample_period_ms);
 			break;
 		case MENU_ITEM_HYSTERESIS:
-			printMsg("HY mV");
+			asynth_display_print_msg("HY mV");
 			value = (uint16_t)(((uint32_t)cv_hysteresis_permille * CV_ADC_FULL_SCALE_MV + 500U) /
 					   1000U);
-			printCue(value);
+			asynth_display_print_cue(value);
 			break;
 		case MENU_ITEM_NET_IP_MODE:
-			printMsg("IPMd ");
-			printCue(net_cfg.ip_mode);
+			asynth_display_print_msg("IPMd ");
+			asynth_display_print_cue(net_cfg.ip_mode);
 			break;
 		case MENU_ITEM_NET_TARGET_IP4:
-			printMsg("T IP ");
-			printCue(net_cfg.target_ip4);
+			asynth_display_print_msg("T IP ");
+			asynth_display_print_cue(net_cfg.target_ip4);
 			break;
 		case MENU_ITEM_NET_TARGET_PORT:
-			printMsg("TPort");
-			printCue(net_cfg.target_port);
+			asynth_display_print_msg("TPort");
+			asynth_display_print_cue(net_cfg.target_port);
 			break;
 		case MENU_ITEM_NET_DEVICE_IP4:
-			printMsg("D IP ");
-			printCue(net_cfg.device_ip4);
+			asynth_display_print_msg("D IP ");
+			asynth_display_print_cue(net_cfg.device_ip4);
 			break;
 		case MENU_ITEM_NET_DEVICE_PORT:
-			printMsg("DPort");
-			printCue(net_cfg.device_port);
+			asynth_display_print_msg("DPort");
+			asynth_display_print_cue(net_cfg.device_port);
 			break;
 		case MENU_ITEM_NET_CIDR_MASK:
-			printMsg("CIDR ");
-			printCue(net_cfg.cidr_mask);
+			asynth_display_print_msg("CIDR ");
+			asynth_display_print_cue(net_cfg.cidr_mask);
 			break;
 		case MENU_ITEM_NET_IP_B1:
-			printMsg("IPb1 ");
-			printCue(net_cfg.ip_b1);
+			asynth_display_print_msg("IPb1 ");
+			asynth_display_print_cue(net_cfg.ip_b1);
 			break;
 		case MENU_ITEM_NET_IP_B2:
-			printMsg("IPb2 ");
-			printCue(net_cfg.ip_b2);
+			asynth_display_print_msg("IPb2 ");
+			asynth_display_print_cue(net_cfg.ip_b2);
 			break;
 		case MENU_ITEM_NET_IP_B3:
-			printMsg("IPb3 ");
-			printCue(net_cfg.ip_b3);
+			asynth_display_print_msg("IPb3 ");
+			asynth_display_print_cue(net_cfg.ip_b3);
 			break;
 		default:
 		// Should not happen, but clear the area if it does.
-			printMsg("     ");
-			printCue(0);
+			asynth_display_print_msg("     ");
+			asynth_display_print_cue(0);
 			break;
 		}
 	} else {
 		// In normal mode, the status line is reserved for transient messages, so clear it when writing other info to avoid confusion.
-		printMsg("     ");
+		asynth_display_print_msg("     ");
 	}
 }
 
@@ -1514,8 +922,27 @@ static void ui_exit_menu_mode(void)
 	current_mode = APP_MODE_NORMAL;
 	ui_write_center_mode_hint();
 	ui_write_status_line();
-	printCue(current_cue_value);
+	asynth_display_print_cue(current_cue_value);
 	ui_apply_button_visual_state();
+
+#if defined(CONFIG_NETWORKING)
+	if (asynth_osc_is_transport_enabled()) {
+		int ret;
+
+		app_osc_remote_addr_ready = false;
+		ret = app_osc_update_remote_addr();
+		if (ret < 0) {
+			printk("OSC: target update failed (%d)\n", ret);
+		} else {
+			printk("OSC: target=%u.%u.%u.%u:%u\n",
+			       (unsigned int)net_cfg.ip_b1,
+			       (unsigned int)net_cfg.ip_b2,
+			       (unsigned int)net_cfg.ip_b3,
+			       (unsigned int)net_cfg.target_ip4,
+			       (unsigned int)app_osc_target_port());
+		}
+	}
+#endif
 }
 
 static void cue_send_recall(uint16_t cue_value)
@@ -1523,22 +950,20 @@ static void cue_send_recall(uint16_t cue_value)
 	char msg_buf[32];
 
 	snprintf(msg_buf, sizeof(msg_buf), "Recall Cue #%u", (unsigned int)cue_value);
-	printMsg(msg_buf);
+	asynth_display_print_msg(msg_buf);
 
 	/* Dedicated hook for future cue-recall side effects (OSC, etc.). */
 }
 
 static void cue_print_blank(void)
 {
-	cfb_framebuffer_set_font(oled, 2);
-	cfb_set_kerning(oled, 0);
-	cfb_print(oled, "   ", 0, 0);
+	asynth_display_clear_cue();
 }
 
 static void printTempCueBlink(uint16_t cue_value, bool visible)
 {
 	if (visible) {
-		printCue(cue_value);
+		asynth_display_print_cue(cue_value);
 	} else {
 		cue_print_blank();
 	}
@@ -1552,10 +977,10 @@ static void cue_pending_cancel(bool show_status)
 
 	cue_pending_active = false;
 	cue_pending_visible = true;
-	printCue(current_cue_value);
+	asynth_display_print_cue(current_cue_value);
 
 	if (show_status) {
-		printMsg("Cue cancel");
+		asynth_display_print_msg("Cue cancel");
 	}
 }
 
@@ -1565,7 +990,7 @@ static void cue_pending_commit_or_recall(void)
 		current_cue_value = cue_pending_value;
 		cue_pending_active = false;
 		cue_pending_visible = true;
-		printCue(current_cue_value);
+		asynth_display_print_cue(current_cue_value);
 	}
 
 	cue_send_recall(current_cue_value);
@@ -1766,74 +1191,7 @@ static void cue_apply_edit_step(int8_t direction)
 		}
 	}
 
-	printCue(current_cue_value);
-}
-
-static int8_t pop_rotary_delta(void)
-{
-	unsigned int key;
-	int8_t delta;
-
-	key = irq_lock();
-	delta = rot_encoder_delta;
-	rot_encoder_delta = 0;
-	irq_unlock(key);
-
-	return delta;
-}
-
-static bool pop_button_event(volatile bool *changed_flag,
-			     volatile bool *pressed_state,
-			     bool *pressed_state_out)
-{
-	unsigned int key;
-	bool changed;
-
-	key = irq_lock();
-	changed = *changed_flag;
-	if (changed) {
-		*changed_flag = false;
-		*pressed_state_out = *pressed_state;
-	}
-	irq_unlock(key);
-
-	return changed;
-}
-
-static bool rot_button_get_debounced_state(uint32_t now_ms, bool *pressed_out)
-{
-	int level;
-	bool raw_pressed;
-
-	level = gpio_pin_get_raw_dt(&rot_button);
-	if (level < 0) {
-		*pressed_out = rot_button_debounced_pressed;
-		return false;
-	}
-
-	raw_pressed = gpio_level_is_pressed(&rot_button, level);
-
-	if (!rot_button_state_initialized) {
-		rot_button_state_initialized = true;
-		rot_button_raw_pressed_prev = raw_pressed;
-		rot_button_debounced_pressed = raw_pressed;
-		rot_button_last_raw_change_ms = now_ms;
-	} else {
-		if (raw_pressed != rot_button_raw_pressed_prev) {
-			rot_button_raw_pressed_prev = raw_pressed;
-			rot_button_last_raw_change_ms = now_ms;
-		}
-
-		if ((rot_button_debounced_pressed != rot_button_raw_pressed_prev) &&
-		    ((uint32_t)(now_ms - rot_button_last_raw_change_ms) >= BUTTON_DEBOUNCE_MS)) {
-			rot_button_debounced_pressed = rot_button_raw_pressed_prev;
-			button_log_state("ROT", &rot_button, level,
-					 rot_button_debounced_pressed, "DEB");
-		}
-	}
-
-	*pressed_out = rot_button_debounced_pressed;
-	return true;
+	asynth_display_print_cue(current_cue_value);
 }
 
 static bool process_button_events(void)
@@ -1846,7 +1204,7 @@ static bool process_button_events(void)
 	bool ui_dirty = false;
 	uint32_t now_ms = k_uptime_get_32();
 
-	if (pop_button_event(&left_button_changed, &left_button_pressed, &left_pressed_now)) {
+	if (asynth_ui_input_pop_button_event(ASYNTH_UI_BUTTON_LEFT, &left_pressed_now)) {
 		if (!left_pressed_now) {
 			if (current_mode == APP_MODE_MENU) {
 				if (current_menu_item == 0U) {
@@ -1866,7 +1224,7 @@ static bool process_button_events(void)
 		}
 	}
 
-	if (pop_button_event(&right_button_changed, &right_button_pressed, &right_pressed_now)) {
+	if (asynth_ui_input_pop_button_event(ASYNTH_UI_BUTTON_RIGHT, &right_pressed_now)) {
 		if (!right_pressed_now) {
 			if (current_mode == APP_MODE_MENU) {
 				current_menu_item = (uint8_t)((current_menu_item + 1U) % MENU_ITEM_COUNT);
@@ -1883,7 +1241,7 @@ static bool process_button_events(void)
 	}
 
 	/* Rotary button: debounced polling-based edge detection for reliable timing. */
-	(void)rot_button_get_debounced_state(now_ms, &rot_button_state_now);
+	(void)asynth_ui_input_get_rot_button_debounced(now_ms, &rot_button_state_now);
 
 	/* Detect press edge (false → true). */
 	if (rot_button_state_now && !rot_button_was_pressed_last_poll) {
@@ -1931,12 +1289,12 @@ static bool process_button_events(void)
 	rot_button_was_pressed_last_poll = rot_button_state_now;
 
 	if (mode_switched_this_cycle) {
-		(void)pop_rotary_delta();
+		(void)asynth_ui_input_pop_rotary_delta();
 		rot_encoder_step_accum = 0;
 		return ui_dirty;
 	}
 
-	delta = pop_rotary_delta();
+	delta = asynth_ui_input_pop_rotary_delta();
 	if (delta != 0) {
 		rot_encoder_step_accum += delta;
 
@@ -1977,13 +1335,13 @@ static bool process_trigger_events(void)
 	bool state;
 	bool ui_dirty = false;
 
-	level = gpio_pin_get_raw_dt(&trigger_1);
+	level = asynth_ui_pin_get_raw_dt(&trigger_1);
 	if (level >= 0) {
-		state = gpio_level_is_pressed(&trigger_1, level);
+		state = asynth_ui_level_is_pressed(&trigger_1, level);
 		if (state != trigger_1_prev_state) {
 			trigger_1_prev_state = state;
-			actT1();
-			ret = osc_out_send_trigger(0U, state);
+			asynth_display_act_t1();
+			ret = asynth_osc_send_trigger(0U, state);
 			if (ret < 0) {
 				printk("OSC send Trigger1 failed (%d)\n", ret);
 			}
@@ -1992,13 +1350,13 @@ static bool process_trigger_events(void)
 		}
 	}
 
-	level = gpio_pin_get_raw_dt(&trigger_2);
+	level = asynth_ui_pin_get_raw_dt(&trigger_2);
 	if (level >= 0) {
-		state = gpio_level_is_pressed(&trigger_2, level);
+		state = asynth_ui_level_is_pressed(&trigger_2, level);
 		if (state != trigger_2_prev_state) {
 			trigger_2_prev_state = state;
-			actT2();
-			ret = osc_out_send_trigger(1U, state);
+			asynth_display_act_t2();
+			ret = asynth_osc_send_trigger(1U, state);
 			if (ret < 0) {
 				printk("OSC send Trigger2 failed (%d)\n", ret);
 			}
@@ -2025,8 +1383,18 @@ int main(void)
 	uint8_t font_width;
 	uint8_t font_height;
 	int ret;
-	uint8_t CV[CV_CHANNEL_COUNT] = { 0, 0, 0, 0 };
 	int64_t next_cv_sample_ms;
+	uint32_t midi_diag_last_log_ms = 0U;
+	const struct asynth_ui_input_pins ui_pins = {
+		.left_button = &left_button,
+		.right_button = &right_button,
+		.rot_button = &rot_button,
+		.rot_encoder_a = &rot_encoder_a,
+		.rot_encoder_b = &rot_encoder_b,
+	};
+
+	// log the current build version in the console for easy reference
+	printk("Asynth2OSC build: %s\n", ASYNTH_BUILD_ID);
 
 	// Initialize top left right buttons leds
 	init_led(left_led);
@@ -2041,10 +1409,21 @@ int main(void)
 		return 0;
 	}
 
-	ret = buttons_init();
+	ret = asynth_ui_input_init(&ui_pins, BUTTON_DEBOUNCE_MS);
 	if (ret < 0) {
-		printk("Buttons init failed (%d)\n", ret);
+		printk("UI input init failed (%d)\n", ret);
 		return 0;
+	}
+
+	ret = triggers_init();
+	if (ret < 0) {
+		printk("Trigger input init failed (%d)\n", ret);
+		return 0;
+	}
+
+	ret = asynth_midi_init();
+	if (ret < 0) {
+		printk("MIDI IN: disabled (%d)\n", ret);
 	}
 
 	ret = net_settings_init();
@@ -2065,6 +1444,12 @@ int main(void)
 	}
 
 	if (cfb_framebuffer_init(oled)) {
+		return 0;
+	}
+
+	ret = asynth_display_init(oled);
+	if (ret < 0) {
+		printk("Display helper init failed (%d)\n", ret);
 		return 0;
 	}
 
@@ -2125,7 +1510,7 @@ int main(void)
 	// Init center mode hint and button visual states
 	ui_write_center_mode_hint();
 	ui_write_status_line();
-	printCue(current_cue_value);
+	asynth_display_print_cue(current_cue_value);
 	ui_apply_button_visual_state();
 
 	// Invert whole display once for proper color scheme
@@ -2142,7 +1527,7 @@ int main(void)
 
 	cfb_framebuffer_finalize(oled);
 
-	ret = cv_adc_init();
+	ret = asynth_cv_init(oled);
 	if (ret < 0) {
 		return 0;
 	}
@@ -2156,6 +1541,8 @@ int main(void)
 	printk("NET: networking is disabled in this build\n");
 #endif
 
+	app_osc_transport_configure();
+
 	next_cv_sample_ms = k_uptime_get();
 
 	/* 
@@ -2165,12 +1552,27 @@ int main(void)
 	while (1) {
 		bool ui_dirty = process_button_events();
 		uint32_t now_ms = k_uptime_get_32();
+		uint32_t dropped;
+
+		asynth_midi_poll_fallback();
+		asynth_midi_sample_uart_errors();
+
+		if (asynth_midi_process_events()) {
+			ui_dirty = true;
+		}
+
+		dropped = asynth_midi_take_drop_count();
+		if (dropped != 0U) {
+			printk("MIDI IN: dropped %u bytes (queue full)\n", (unsigned int)dropped);
+		}
+
+		asynth_midi_log_diag(&midi_diag_last_log_ms);
 
 		if (process_trigger_events()) {
 			ui_dirty = true;
 		}
 
-		if (ui_tick_status_message_scroll()) {
+		if (asynth_display_tick_status_message_scroll()) {
 			ui_dirty = true;
 		}
 
@@ -2178,38 +1580,18 @@ int main(void)
 			ui_dirty = true;
 		}
 
-		if (trigger_1_active && (now_ms >= trigger_1_blink_end_ms)) {
-			cfb_invert_area(oled, 80, 0, 11, 14);
-			trigger_1_active = false;
-			ui_dirty = true;
-		}
-
-		if (trigger_2_active && (now_ms >= trigger_2_blink_end_ms)) {
-			cfb_invert_area(oled, 116, 0, 11, 14);
-			trigger_2_active = false;
-			ui_dirty = true;
-		}
-
-		if (midi_active && (now_ms >= midi_blink_end_ms)) {
-			cfb_invert_area(oled, 92, 0, 11, 14);
-			midi_active = false;
-			ui_dirty = true;
-		}
-
-		if (audio_active && (now_ms >= audio_blink_end_ms)) {
-			cfb_invert_area(oled, 104, 0, 11, 14);
-			audio_active = false;
+		if (asynth_display_tick_activity(now_ms)) {
 			ui_dirty = true;
 		}
 
 		if (k_uptime_get() >= next_cv_sample_ms) {
-			ret = cv_sample_and_process();
+			ret = asynth_cv_sample_and_process(cv_hysteresis_norm);
 			if (ret == 0) {
-				update_cv_bars(CV);
+				asynth_cv_refresh_bars();
 			}
 
 			if (current_mode == APP_MODE_NORMAL && !cue_pending_active) {
-				printCue(current_cue_value);
+				asynth_display_print_cue(current_cue_value);
 			}
 
 			ui_dirty = true;
