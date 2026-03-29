@@ -59,6 +59,16 @@
 			gpios = <&gpioa 8 GPIO_ACTIVE_LOW>;
 			zephyr,code = <INPUT_KEY_ENTER>;
 		};
+		trigger_1: trigger_0 {
+			label = "Trigger1";
+			gpios = <&gpioe 13 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		trigger_2: trigger_1 {
+			label = "Trigger2";
+			gpios = <&gpioe 14 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
 	};
 
 	 gpioqdec: qdec1 {
@@ -71,6 +81,13 @@
 		 sample-time-us = <2000>;
 		 idle-timeout-ms = <200>;
 	 };
+
+	zephyr,user {
+		/* ADC scan order indexes */
+		cv-channel-ids = <16 19 3 15>;
+		/* ADC index: UI and OSC CV index remap */
+		cv-display-remap = <0 2 3 1>;
+	};
 
 	aliases {
 		led0 = &debug_led;
