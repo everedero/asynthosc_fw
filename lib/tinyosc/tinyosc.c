@@ -27,6 +27,7 @@
 #elif ZEPHYR_RTOS
 #include <zephyr/net/net_ip.h>
 #include <zephyr/kernel.h>
+#include <stdint.h>
 #include <stdarg.h>
 #define tosc_strncpy(_dst, _src, _len) strncpy(_dst, _src, _len)
 #else
