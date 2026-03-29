@@ -1,4 +1,5 @@
 board:
+  full_name: Asynthosc board
   name: asynthosc
   vendor: rederotech
   socs:
