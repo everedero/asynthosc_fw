@@ -255,7 +255,7 @@ zephyr_udc0: &usbotg_fs {
 	w25q32jvss: qspi-nor-flash@90000000 {
 		compatible = "st,stm32-qspi-nor";
 		reg = <0x90000000>;
-		size = <DT_SIZE_M(4)>; /* 32 Mbits */
+		size = <DT_SIZE_M(32)>; /* 32 Mbits */
 		qspi-max-frequency = <8000000>;
 		status = "okay";
 		spi-bus-width = <4>;
