@@ -32,11 +32,18 @@ static volatile int midi_in_last_uart_err;
 static asynth_midi_handler_t midi_note_handler;
 static asynth_midi_handler_t midi_cc_handler;
 static asynth_midi_handler_t midi_pc_handler;
+static bool midi_note_forward_enabled;
 
 /* MIDI parser state machine */
 static uint8_t midi_running_status;
 static uint8_t midi_data_bytes[2];
 static uint8_t midi_data_count;
+
+/* SysEx buffer (MMC, MTC Full Frame) */
+#define MIDI_SYSEX_BUF_LEN 32U
+static uint8_t midi_sysex_buf[MIDI_SYSEX_BUF_LEN];
+static uint8_t midi_sysex_len;
+static bool midi_in_sysex;
 
 static void midi_in_uart_cb(const struct device *dev, void *user_data)
 {
@@ -166,44 +173,104 @@ void asynth_midi_log_diag(uint32_t *last_log_ms)
 	       (unsigned int)last_err);
 }
 
+static void midi_dispatch_sysex(const uint8_t *buf, uint8_t len)
+{
+	/* Require Universal Real-Time SysEx header: 7F <devID> ... */
+	if (len < 4U || buf[0] != 0x7FU) {
+		return;
+	}
+
+	/* MMC: F0 7F <devID> 06 <cmd> F7 → buf={7F devID 06 cmd}, len=4 */
+	if (buf[2] == 0x06U) {
+		(void)asynth_osc_send_midi_mmc(buf[1], buf[3]);
+		return;
+	}
+
+	/* MTC Full Frame: F0 7F <devID> 01 01 <hr> <mn> <se> <fr> F7
+	 * → buf={7F devID 01 01 hr mn se fr}, len=8
+	 * packed = (hr << 24) | (mn << 16) | (se << 8) | fr
+	 * hr byte encodes frame rate (bits 6-5) and hours (bits 4-0). */
+	if (len >= 8U && buf[2] == 0x01U && buf[3] == 0x01U) {
+		uint32_t packed = ((uint32_t)buf[4] << 24) |
+				  ((uint32_t)buf[5] << 16) |
+				  ((uint32_t)buf[6] <<  8) |
+				   (uint32_t)buf[7];
+		(void)asynth_osc_send_midi_mtc_ff(packed);
+		return;
+	}
+}
+
 static void midi_parse_and_dispatch(uint8_t byte)
 {
 	struct asynth_midi_msg msg;
 	uint8_t status_nibble;
 
-	/* Handle system messages and status bytes */
-	if (byte & 0x80) {
-		/* This is a status byte */
-		if (byte == 0xF0 || byte == 0xF7) {
-			/* Sysex - not supported, reset parser */
+	/* System Real-Time (0xF8-0xFF): single byte, ignore */
+	if (byte >= 0xF8U) {
+		return;
+	}
+
+	/* SysEx in progress: collect bytes until 0xF7 end marker */
+	if (midi_in_sysex) {
+		if (byte == 0xF7U) {
+			midi_in_sysex = false;
+			midi_dispatch_sysex(midi_sysex_buf, midi_sysex_len);
+		} else if (!(byte & 0x80U)) {
+			if (midi_sysex_len < MIDI_SYSEX_BUF_LEN) {
+				midi_sysex_buf[midi_sysex_len++] = byte;
+			}
+			/* else: buffer full, drop byte silently */
+		} else {
+			/* Unexpected status byte: abort SysEx, treat as new status */
+			midi_in_sysex = false;
+			midi_sysex_len = 0;
+			midi_running_status = byte;
+			midi_data_count = 0;
+		}
+		return;
+	}
+
+	if (byte & 0x80U) {
+		/* Status byte */
+		if (byte == 0xF0U) {
+			/* SysEx start */
+			midi_in_sysex = true;
+			midi_sysex_len = 0;
 			midi_running_status = 0;
 			midi_data_count = 0;
 			return;
-		} else if (byte >= 0xF8) {
-			/* System Real-Time - single byte, ignored for now */
-			return;
 		}
 
-		/* Channel message status byte */
+		/* Channel or System Common message */
 		midi_running_status = byte;
 		midi_data_count = 0;
 		return;
 	}
 
-	/* This is a data byte */
+	/* Data byte */
 	if (midi_running_status == 0) {
-		/* No running status, ignore */
 		return;
 	}
 
 	midi_data_bytes[midi_data_count++] = byte;
 
-	status_nibble = midi_running_status & 0xF0;
+	status_nibble = midi_running_status & 0xF0U;
 	msg.status = midi_running_status;
-	msg.channel = midi_running_status & 0x0F;
+	msg.channel = midi_running_status & 0x0FU;
 	msg.msg_type = (enum asynth_midi_msg_type)status_nibble;
 
-	/* Determine expected data byte count and dispatch when complete */
+	/* MTC Quarter Frame: 0xF1, 1 data byte (bits 6-4 = piece, bits 3-0 = value nibble) */
+	if (midi_running_status == 0xF1U) {
+		if (midi_data_count >= 1) {
+			(void)asynth_osc_send_midi_mtc_qf(
+				(midi_data_bytes[0] >> 4) & 0x07U,
+				 midi_data_bytes[0] & 0x0FU);
+			midi_data_count = 0;
+		}
+		return;
+	}
+
+	/* Channel messages */
 	switch (status_nibble) {
 	case 0xC0: /* Program Change - 1 data byte */
 	case 0xD0: /* Channel Pressure - 1 data byte */
@@ -237,19 +304,29 @@ static void midi_parse_and_dispatch(uint8_t byte)
 				if (midi_note_handler) {
 					midi_note_handler(&msg);
 				}
-				(void)asynth_osc_send_midi_note_on(msg.channel, msg.data1, msg.data2);
+				if (midi_note_forward_enabled) {
+					(void)asynth_osc_send_midi_note_on(msg.channel, msg.data1, msg.data2);
+				}
 			} else if (status_nibble == 0x80) {
 				/* Note Off */
 				if (midi_note_handler) {
 					midi_note_handler(&msg);
 				}
-				(void)asynth_osc_send_midi_note_off(msg.channel, msg.data1);
+				if (midi_note_forward_enabled) {
+					(void)asynth_osc_send_midi_note_off(msg.channel, msg.data1);
+				}
 			} else if (status_nibble == 0xB0) {
 				/* Control Change */
 				if (midi_cc_handler) {
 					midi_cc_handler(&msg);
 				}
 				(void)asynth_osc_send_midi_cc(msg.channel, msg.data1, msg.data2);
+			} else if (status_nibble == 0xE0) {
+				/* Pitch Bend: LSB in data1, MSB in data2, 14-bit centered at 8192 */
+				int16_t bend = (int16_t)(
+					(int32_t)(((uint16_t)msg.data2 << 7) |
+					           (uint16_t)msg.data1) - 8192);
+				(void)asynth_osc_send_midi_pitch_bend(msg.channel, bend);
 			}
 
 			midi_data_count = 0;
@@ -284,6 +361,16 @@ uint32_t asynth_midi_take_drop_count(void)
 	}
 
 	return dropped;
+}
+
+void asynth_midi_set_note_forward_enabled(bool enabled)
+{
+	midi_note_forward_enabled = enabled;
+}
+
+bool asynth_midi_is_note_forward_enabled(void)
+{
+	return midi_note_forward_enabled;
 }
 
 /* Handler registration */

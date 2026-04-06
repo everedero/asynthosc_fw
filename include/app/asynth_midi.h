@@ -41,6 +41,8 @@ void asynth_midi_sample_uart_errors(void);
 void asynth_midi_log_diag(uint32_t *last_log_ms);
 bool asynth_midi_process_events(void);
 uint32_t asynth_midi_take_drop_count(void);
+void asynth_midi_set_note_forward_enabled(bool enabled);
+bool asynth_midi_is_note_forward_enabled(void);
 
 /* Handler registration */
 void asynth_midi_set_note_handler(asynth_midi_handler_t handler);

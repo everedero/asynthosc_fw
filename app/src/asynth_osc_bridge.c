@@ -9,8 +9,12 @@
 
 #define CV_CHANNEL_COUNT 4U
 
-#define MIDI_CHANNEL_MAX 15U
-#define MIDI_DATA_MAX 127U
+#define MIDI_CHANNEL_MAX       15U
+#define MIDI_DATA_MAX          127U
+#define MIDI_PITCH_BEND_MIN    (-8192)
+#define MIDI_PITCH_BEND_MAX    (8191)
+#define MIDI_MTC_PIECE_MAX     7U
+#define MIDI_MTC_VALUE_MAX     15U
 
 static bool transport_enabled;
 static struct asynth_osc_transport_ops transport_ops;
@@ -76,6 +80,10 @@ void asynth_osc_set_transport_ops(const struct asynth_osc_transport_ops *ops)
 		transport_ops.send_midi_note_off = NULL;
 		transport_ops.send_midi_pc = NULL;
 		transport_ops.send_midi_cc = NULL;
+		transport_ops.send_midi_pitch_bend = NULL;
+		transport_ops.send_midi_mmc = NULL;
+		transport_ops.send_midi_mtc_qf = NULL;
+		transport_ops.send_midi_mtc_ff = NULL;
 		return;
 	}
 
@@ -85,6 +93,10 @@ void asynth_osc_set_transport_ops(const struct asynth_osc_transport_ops *ops)
 	transport_ops.send_midi_note_off = ops->send_midi_note_off;
 	transport_ops.send_midi_pc = ops->send_midi_pc;
 	transport_ops.send_midi_cc = ops->send_midi_cc;
+	transport_ops.send_midi_pitch_bend = ops->send_midi_pitch_bend;
+	transport_ops.send_midi_mmc = ops->send_midi_mmc;
+	transport_ops.send_midi_mtc_qf = ops->send_midi_mtc_qf;
+	transport_ops.send_midi_mtc_ff = ops->send_midi_mtc_ff;
 }
 
 int asynth_osc_send_cv(uint8_t cv_index, float normalized)
@@ -256,5 +268,83 @@ int asynth_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 	ARG_UNUSED(channel);
 	ARG_UNUSED(number);
 	ARG_UNUSED(value);
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+{
+	int ret;
+
+	ret = asynth_osc_validate_midi_channel(channel);
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (value < MIDI_PITCH_BEND_MIN || value > MIDI_PITCH_BEND_MAX) {
+		return -ERANGE;
+	}
+
+	if (transport_enabled) {
+		if (transport_ops.send_midi_pitch_bend == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_pitch_bend(channel, value);
+	}
+
+	ARG_UNUSED(channel);
+	ARG_UNUSED(value);
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+{
+	if (transport_enabled) {
+		if (transport_ops.send_midi_mmc == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_mmc(dev_id, command);
+	}
+
+	ARG_UNUSED(dev_id);
+	ARG_UNUSED(command);
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
+{
+	if (piece > MIDI_MTC_PIECE_MAX) {
+		return -EINVAL;
+	}
+
+	if (value > MIDI_MTC_VALUE_MAX) {
+		return -EINVAL;
+	}
+
+	if (transport_enabled) {
+		if (transport_ops.send_midi_mtc_qf == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_mtc_qf(piece, value);
+	}
+
+	ARG_UNUSED(piece);
+	ARG_UNUSED(value);
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_mtc_ff(uint32_t packed)
+{
+	if (transport_enabled) {
+		if (transport_ops.send_midi_mtc_ff == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_mtc_ff(packed);
+	}
+
+	ARG_UNUSED(packed);
 	return asynth_osc_stub_send();
 }

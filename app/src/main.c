@@ -96,6 +96,7 @@ const struct device *oled;
 #define NET_SETTINGS_IP_BYTE_MAX             255U
 #define NET_SETTINGS_CIDR_MAX                32U
 #define NET_SETTINGS_IP_MODE_MAX             2U
+#define MIDI_SETTINGS_NOTE_THRU_MAX          1U
 
 #define NET_SETTINGS_DEFAULT_IP_MODE         0U
 #define NET_SETTINGS_DEFAULT_TARGET_IP4      142U
@@ -119,6 +120,7 @@ const struct device *oled;
 
 #define ADC_SETTINGS_KEY_SAMPLE_PERIOD_MS    "asynth/adc/sample_period_ms"
 #define ADC_SETTINGS_KEY_HYSTERESIS_PERMILLE "asynth/adc/hysteresis_permille"
+#define MIDI_SETTINGS_KEY_NOTE_THRU          "asynth/midi/note_thru"
 
 #define CUE_SETTINGS_KEY_CURRENT_VALUE       "asynth/cue/current_value"
 
@@ -129,10 +131,14 @@ const struct device *oled;
 #define OSC_PATH_CV4                "/asynth/cv/4"
 #define OSC_PATH_TRIGGER1           "/asynth/trig/1"
 #define OSC_PATH_TRIGGER2           "/asynth/trig/2"
-#define OSC_PATH_MIDI_NOTE_ON       "/asynth/midi/noteON"
-#define OSC_PATH_MIDI_NOTE_OFF      "/asynth/midi/noteOFF"
-#define OSC_PATH_MIDI_PC            "/asynth/midi/PC"
-#define OSC_PATH_MIDI_CC            "/asynth/midi/CC"
+#define OSC_PATH_MIDI_NOTE_ON        "/asynth/midi/noteON"
+#define OSC_PATH_MIDI_NOTE_OFF       "/asynth/midi/noteOFF"
+#define OSC_PATH_MIDI_PC             "/asynth/midi/PC"
+#define OSC_PATH_MIDI_CC             "/asynth/midi/CC"
+#define OSC_PATH_MIDI_PITCH_BEND     "/asynth/midi/pitchBend"
+#define OSC_PATH_MIDI_MMC            "/asynth/midi/MMC"
+#define OSC_PATH_MIDI_MTC_QF         "/asynth/midi/MTC/QF"
+#define OSC_PATH_MIDI_MTC_FF         "/asynth/midi/MTC/fullFrame"
 #define OSC_PATH_PING               "/asynth/ping"
 #define OSC_PATH_PONG               "/asynth/pong"
 #define OSC_PATH_MSG                "/asynth/msg"
@@ -155,6 +161,7 @@ enum menu_item {
 	MENU_ITEM_NET_IP_B1,
 	MENU_ITEM_NET_IP_B2,
 	MENU_ITEM_NET_IP_B3,
+	MENU_ITEM_MIDI_NOTE_THRU,
 	MENU_ITEM_COUNT,
 };
 
@@ -204,6 +211,7 @@ static bool net_settings_ready;
 
 static bool trigger_1_prev_state;
 static bool trigger_2_prev_state;
+static uint16_t midi_note_thru = 0U;
 
 static enum app_mode current_mode = APP_MODE_NORMAL;
 static uint8_t current_menu_item = MENU_ITEM_SAMPLE_PERIOD;
@@ -731,6 +739,140 @@ static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 	return 0;
 }
 
+static int app_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
+	 * Path encodes channel: pitchBend/{channel}, arg: value (-8192..+8191). */
+	snprintk(path, sizeof(path), "%s/%u",
+		 OSC_PATH_MIDI_PITCH_BEND, (unsigned int)(channel + 1U));
+	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)value);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
+			   (struct sockaddr *)&app_osc_remote_addr,
+			   sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Path encodes device ID: MMC/{devID}, arg: MMC command code. */
+	snprintk(path, sizeof(path), "%s/%u", OSC_PATH_MIDI_MMC, (unsigned int)dev_id);
+	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)command);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
+			   (struct sockaddr *)&app_osc_remote_addr,
+			   sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Path encodes piece index (0-7): MTC/QF/{piece}, arg: value nibble (0-15). */
+	snprintk(path, sizeof(path), "%s/%u", OSC_PATH_MIDI_MTC_QF, (unsigned int)piece);
+	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)value);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
+			   (struct sockaddr *)&app_osc_remote_addr,
+			   sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_mtc_ff(uint32_t packed)
+{
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MTC Full Frame: packed = (hr << 24) | (mn << 16) | (se << 8) | fr.
+	 * hr byte encodes frame rate (bits 6-5) and hours (bits 4-0). */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_MTC_FF, "i", (int32_t)packed);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
+			   (struct sockaddr *)&app_osc_remote_addr,
+			   sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
 static void app_osc_transport_configure(void)
 {
 	const struct asynth_osc_transport_ops ops = {
@@ -740,6 +882,10 @@ static void app_osc_transport_configure(void)
 		.send_midi_note_off = app_osc_send_midi_note_off,
 		.send_midi_pc = app_osc_send_midi_pc,
 		.send_midi_cc = app_osc_send_midi_cc,
+		.send_midi_pitch_bend = app_osc_send_midi_pitch_bend,
+		.send_midi_mmc = app_osc_send_midi_mmc,
+		.send_midi_mtc_qf = app_osc_send_midi_mtc_qf,
+		.send_midi_mtc_ff = app_osc_send_midi_mtc_ff,
 	};
 
 	asynth_osc_set_transport_ops(&ops);
@@ -789,6 +935,33 @@ static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 	ARG_UNUSED(channel);
 	ARG_UNUSED(number);
 	ARG_UNUSED(value);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+{
+	ARG_UNUSED(channel);
+	ARG_UNUSED(value);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+{
+	ARG_UNUSED(dev_id);
+	ARG_UNUSED(command);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
+{
+	ARG_UNUSED(piece);
+	ARG_UNUSED(value);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_mtc_ff(uint32_t packed)
+{
+	ARG_UNUSED(packed);
 	return -ENOTSUP;
 }
 #endif
@@ -894,6 +1067,15 @@ static void net_settings_clamp_all(void)
 	cv_hysteresis_norm = ((float)cv_hysteresis_permille) / 1000.0f;
 }
 
+static void midi_settings_apply(void)
+{
+	if (midi_note_thru > MIDI_SETTINGS_NOTE_THRU_MAX) {
+		midi_note_thru = 0U;
+	}
+
+	asynth_midi_set_note_forward_enabled(midi_note_thru == 1U);
+}
+
 static int net_settings_read_u16(size_t len, settings_read_cb read_cb, void *cb_arg, uint16_t *dst)
 {
 	uint16_t tmp;
@@ -941,6 +1123,10 @@ static int asynth_settings_set(const char *name, size_t len, settings_read_cb re
 
 		cv_hysteresis_permille = tmp;
 		return 0;
+	}
+
+	if (settings_name_steq(name, "midi/note_thru", &next) && !next) {
+		return net_settings_read_u16(len, read_cb, cb_arg, &midi_note_thru);
 	}
 
 	if (settings_name_steq(name, "net/ip_mode", &next) && !next) {
@@ -1057,9 +1243,11 @@ static int __unused net_settings_init(void)
 	}
 
 	net_settings_clamp_all();
+	midi_settings_apply();
 	net_settings_ready = true;
 	net_settings_log_current("startup");
 	adc_settings_log_current("startup");
+	printk("MIDICFG[startup]: note_thru=%u\n", (unsigned int)midi_note_thru);
 
 	return 0;
 }
@@ -1067,9 +1255,11 @@ static int __unused net_settings_init(void)
 static void net_settings_use_defaults(void)
 {
 	net_settings_clamp_all();
+	midi_settings_apply();
 	net_settings_ready = false;
 	net_settings_log_current("defaults");
 	adc_settings_log_current("defaults");
+	printk("MIDICFG[defaults]: note_thru=%u\n", (unsigned int)midi_note_thru);
 }
 
 static uint16_t menu_wrap_u16_step(uint16_t value, uint16_t min_val, uint16_t max_val, int8_t direction)
@@ -1115,6 +1305,20 @@ static void adc_settings_save_and_report(const char *key, const char *label, uin
 
 	printk("ADCCFG: %s=%u\n", label, (unsigned int)value);
 	adc_settings_log_current("menu");
+}
+
+static void midi_settings_save_and_report(uint16_t value)
+{
+	int ret;
+
+	if (net_settings_ready) {
+		ret = settings_save_one(MIDI_SETTINGS_KEY_NOTE_THRU, &value, sizeof(value));
+		if (ret < 0) {
+			printk("MIDICFG: save failed for note_thru (%d)\n", ret);
+		}
+	}
+
+	printk("MIDICFG: note_thru=%u\n", (unsigned int)value);
 }
 
 
@@ -1241,6 +1445,10 @@ static void ui_write_status_line(void)
 		case MENU_ITEM_NET_IP_B3:
 			asynth_display_print_msg("IP byte 3 ");
 			asynth_display_print_cue(net_cfg.ip_b3);
+			break;
+		case MENU_ITEM_MIDI_NOTE_THRU:
+			asynth_display_print_msg("MIDI Note (0:ignore 1:thru)");
+			asynth_display_print_cue(midi_note_thru);
 			break;
 		default:
 		// Should not happen, but clear the area if it does.
@@ -1480,6 +1688,12 @@ static void menu_apply_edit_step(int8_t direction)
 		net_cfg.ip_b3 = menu_wrap_u16_step(net_cfg.ip_b3, 0U, NET_SETTINGS_IP_BYTE_MAX,
 						  direction);
 		net_settings_save_and_report(NET_SETTINGS_KEY_IP_B3, "IP b3", net_cfg.ip_b3);
+	} else if (current_menu_item == MENU_ITEM_MIDI_NOTE_THRU) {
+		midi_note_thru = menu_wrap_u16_step(midi_note_thru, 0U,
+						   MIDI_SETTINGS_NOTE_THRU_MAX,
+						   direction);
+		midi_settings_apply();
+		midi_settings_save_and_report(midi_note_thru);
 	}
 
 	ui_write_status_line();
@@ -1525,6 +1739,10 @@ static void menu_reset_current_item_to_default(void)
 	} else if (current_menu_item == MENU_ITEM_NET_IP_B3) {
 		net_cfg.ip_b3 = NET_SETTINGS_DEFAULT_IP_B3;
 		net_settings_save_and_report(NET_SETTINGS_KEY_IP_B3, "IP b3", net_cfg.ip_b3);
+	} else if (current_menu_item == MENU_ITEM_MIDI_NOTE_THRU) {
+		midi_note_thru = 0U;
+		midi_settings_apply();
+		midi_settings_save_and_report(midi_note_thru);
 	}
 
 	ui_write_status_line();
