@@ -7,6 +7,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
+#include <app/asynth_osc_bridge.h>
 #include <app/asynth_display.h>
 
 #define MIDI_IN_NODE DT_NODELABEL(midi)
@@ -214,10 +215,9 @@ static void midi_parse_and_dispatch(uint8_t byte)
 				midi_pc_handler(&msg);
 			}
 
-			printk("MIDI: %s CH%u VAL=%u\n",
-			       status_nibble == 0xC0 ? "PC" : "CP",
-			       (unsigned int)msg.channel + 1,
-			       (unsigned int)msg.data1);
+			if (status_nibble == 0xC0) {
+				(void)asynth_osc_send_midi_pc(msg.channel, msg.data1);
+			}
 
 			midi_data_count = 0;
 		}
@@ -237,28 +237,19 @@ static void midi_parse_and_dispatch(uint8_t byte)
 				if (midi_note_handler) {
 					midi_note_handler(&msg);
 				}
-				printk("MIDI: Note On CH%u NOTE=%u VEL=%u\n",
-				       (unsigned int)msg.channel + 1,
-				       (unsigned int)msg.data1,
-				       (unsigned int)msg.data2);
+				(void)asynth_osc_send_midi_note_on(msg.channel, msg.data1, msg.data2);
 			} else if (status_nibble == 0x80) {
 				/* Note Off */
 				if (midi_note_handler) {
 					midi_note_handler(&msg);
 				}
-				printk("MIDI: Note Off CH%u NOTE=%u VEL=%u\n",
-				       (unsigned int)msg.channel + 1,
-				       (unsigned int)msg.data1,
-				       (unsigned int)msg.data2);
+				(void)asynth_osc_send_midi_note_off(msg.channel, msg.data1);
 			} else if (status_nibble == 0xB0) {
 				/* Control Change */
 				if (midi_cc_handler) {
 					midi_cc_handler(&msg);
 				}
-				printk("MIDI: CC CH%u CC=%u VAL=%u\n",
-				       (unsigned int)msg.channel + 1,
-				       (unsigned int)msg.data1,
-				       (unsigned int)msg.data2);
+				(void)asynth_osc_send_midi_cc(msg.channel, msg.data1, msg.data2);
 			}
 
 			midi_data_count = 0;

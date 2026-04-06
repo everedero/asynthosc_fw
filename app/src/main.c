@@ -49,10 +49,10 @@ const struct device *oled;
 #define CV_ADC_MAX_RAW        ((1U << CV_ADC_RESOLUTION) - 1U)
 #define CV_ADC_FULL_SCALE_MV  3300U
 
-#define CV_SAMPLE_PERIOD_MIN_MS           20U
+#define CV_SAMPLE_PERIOD_MIN_MS           10U
 #define CV_SAMPLE_PERIOD_MAX_MS           200U
 #define CV_SAMPLE_PERIOD_STEP_MS          5U
-#define CV_SAMPLE_PERIOD_DEFAULT_MS       50U
+#define CV_SAMPLE_PERIOD_DEFAULT_MS       20U
 
 #define CV_HYSTERESIS_MIN_PERMILLE        5U
 #define CV_HYSTERESIS_MAX_PERMILLE        50U
@@ -98,7 +98,7 @@ const struct device *oled;
 #define NET_SETTINGS_IP_MODE_MAX             2U
 
 #define NET_SETTINGS_DEFAULT_IP_MODE         0U
-#define NET_SETTINGS_DEFAULT_TARGET_IP4      100U
+#define NET_SETTINGS_DEFAULT_TARGET_IP4      142U
 #define NET_SETTINGS_DEFAULT_TARGET_PORT     10U
 #define NET_SETTINGS_DEFAULT_DEVICE_IP4      42U
 #define NET_SETTINGS_DEFAULT_DEVICE_PORT     11U
@@ -121,6 +121,22 @@ const struct device *oled;
 #define ADC_SETTINGS_KEY_HYSTERESIS_PERMILLE "asynth/adc/hysteresis_permille"
 
 #define CUE_SETTINGS_KEY_CURRENT_VALUE       "asynth/cue/current_value"
+
+/* OSC message paths */
+#define OSC_PATH_CV1                "/asynth/cv/1"
+#define OSC_PATH_CV2                "/asynth/cv/2"
+#define OSC_PATH_CV3                "/asynth/cv/3"
+#define OSC_PATH_CV4                "/asynth/cv/4"
+#define OSC_PATH_TRIGGER1           "/asynth/trig/1"
+#define OSC_PATH_TRIGGER2           "/asynth/trig/2"
+#define OSC_PATH_MIDI_NOTE_ON       "/asynth/midi/noteON"
+#define OSC_PATH_MIDI_NOTE_OFF      "/asynth/midi/noteOFF"
+#define OSC_PATH_MIDI_PC            "/asynth/midi/PC"
+#define OSC_PATH_MIDI_CC            "/asynth/midi/CC"
+#define OSC_PATH_PING               "/asynth/ping"
+#define OSC_PATH_PONG               "/asynth/pong"
+#define OSC_PATH_MSG                "/asynth/msg"
+#define OSC_PATH_CUE                "/asynth/cue"
 
 enum app_mode {
 	APP_MODE_NORMAL = 0,
@@ -438,7 +454,22 @@ static int app_osc_transport_send_cv(uint8_t cv_index, float normalized)
 		return ret;
 	}
 
-	snprintk(path, sizeof(path), "/asynth/cv%u", (unsigned int)(cv_index + 1U));
+	switch (cv_index) {
+	case 0:
+		snprintk(path, sizeof(path), OSC_PATH_CV1);
+		break;
+	case 1:
+		snprintk(path, sizeof(path), OSC_PATH_CV2);
+		break;
+	case 2:
+		snprintk(path, sizeof(path), OSC_PATH_CV3);
+		break;
+	case 3:
+		snprintk(path, sizeof(path), OSC_PATH_CV4);
+		break;
+	default:
+		return -EINVAL;
+	}
 	len = tosc_writeMessage(packet, sizeof(packet), path, "f", (double)normalized);
 	if (len < 0) {
 		return -EINVAL;
@@ -479,8 +510,210 @@ static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
 	}
 
 	value = active ? 1 : 0;
-	snprintk(path, sizeof(path), "/asynth/trigger%u", (unsigned int)(trigger_index + 1U));
+	snprintk(path, sizeof(path), trigger_index == 0 ? OSC_PATH_TRIGGER1 : OSC_PATH_TRIGGER2);
 	len = tosc_writeMessage(packet, sizeof(packet), path, "i", value);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_cue(uint16_t cue_value)
+{
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	len = tosc_writeMessage(packet, sizeof(packet), OSC_PATH_CUE, "i", (int32_t)cue_value);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_note_on(uint8_t channel, uint8_t pitch, uint8_t velocity)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
+	 * Path encodes channel and pitch: noteON/{channel}/{pitch}, arg: velocity. */
+	snprintk(path, sizeof(path), "%s/%u/%u",
+		 OSC_PATH_MIDI_NOTE_ON, (unsigned int)(channel + 1U), (unsigned int)pitch);
+	len = tosc_writeMessage(packet,
+				 sizeof(packet),
+				 path,
+				 "i",
+				 (int32_t)velocity);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_note_off(uint8_t channel, uint8_t pitch)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
+	 * Path encodes channel: noteOFF/{channel}, arg: pitch. */
+	snprintk(path, sizeof(path), "%s/%u",
+		 OSC_PATH_MIDI_NOTE_OFF, (unsigned int)(channel + 1U));
+	len = tosc_writeMessage(packet,
+				 sizeof(packet),
+				 path,
+				 "i",
+				 (int32_t)pitch);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_pc(uint8_t channel, uint8_t program)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
+	 * Path encodes channel: PC/{channel}, arg: program. */
+	snprintk(path, sizeof(path), "%s/%u",
+		 OSC_PATH_MIDI_PC, (unsigned int)(channel + 1U));
+	len = tosc_writeMessage(packet,
+				 sizeof(packet),
+				 path,
+				 "i",
+				 (int32_t)program);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (struct sockaddr *)&app_osc_remote_addr,
+				 sizeof(app_osc_remote_addr));
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
+{
+	char path[32];
+	char packet[128];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
+	 * Path encodes channel and CC number for per-controller routing:
+	 * CC/{channel}/{number}, arg: value. */
+	snprintk(path, sizeof(path), "%s/%u/%u",
+		 OSC_PATH_MIDI_CC, (unsigned int)(channel + 1U), (unsigned int)number);
+	len = tosc_writeMessage(packet,
+				 sizeof(packet),
+				 path,
+				 "i",
+				 (int32_t)value);
 	if (len < 0) {
 		return -EINVAL;
 	}
@@ -503,6 +736,10 @@ static void app_osc_transport_configure(void)
 	const struct asynth_osc_transport_ops ops = {
 		.send_cv = app_osc_transport_send_cv,
 		.send_trigger = app_osc_transport_send_trigger,
+		.send_midi_note_on = app_osc_send_midi_note_on,
+		.send_midi_note_off = app_osc_send_midi_note_off,
+		.send_midi_pc = app_osc_send_midi_pc,
+		.send_midi_cc = app_osc_send_midi_cc,
 	};
 
 	asynth_osc_set_transport_ops(&ops);
@@ -517,6 +754,42 @@ static void app_osc_transport_configure(void)
 {
 	asynth_osc_set_transport_ops(NULL);
 	asynth_osc_set_transport_enabled(false);
+}
+
+static int app_osc_send_cue(uint16_t cue_value)
+{
+	ARG_UNUSED(cue_value);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_note_on(uint8_t channel, uint8_t pitch, uint8_t velocity)
+{
+	ARG_UNUSED(channel);
+	ARG_UNUSED(pitch);
+	ARG_UNUSED(velocity);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_note_off(uint8_t channel, uint8_t pitch)
+{
+	ARG_UNUSED(channel);
+	ARG_UNUSED(pitch);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_pc(uint8_t channel, uint8_t program)
+{
+	ARG_UNUSED(channel);
+	ARG_UNUSED(program);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
+{
+	ARG_UNUSED(channel);
+	ARG_UNUSED(number);
+	ARG_UNUSED(value);
+	return -ENOTSUP;
 }
 #endif
 
@@ -924,54 +1197,54 @@ static void ui_write_status_line(void)
 	if (current_mode == APP_MODE_MENU) {
 		switch (current_menu_item) {
 		case MENU_ITEM_SAMPLE_PERIOD:
-			asynth_display_print_msg("SR ms");
+			asynth_display_print_msg("CV period (ms)");
 			asynth_display_print_cue(cv_sample_period_ms);
 			break;
 		case MENU_ITEM_HYSTERESIS:
-			asynth_display_print_msg("HY mV");
+			asynth_display_print_msg("CV Hysteresis (mV)");
 			value = (uint16_t)(((uint32_t)cv_hysteresis_permille * CV_ADC_FULL_SCALE_MV + 500U) /
 					   1000U);
 			asynth_display_print_cue(value);
 			break;
 		case MENU_ITEM_NET_IP_MODE:
-			asynth_display_print_msg("IPMd ");
+			asynth_display_print_msg("IP Mode");
 			asynth_display_print_cue(net_cfg.ip_mode);
 			break;
 		case MENU_ITEM_NET_TARGET_IP4:
-			asynth_display_print_msg("T IP ");
+			asynth_display_print_msg("Target IP");
 			asynth_display_print_cue(net_cfg.target_ip4);
 			break;
 		case MENU_ITEM_NET_TARGET_PORT:
-			asynth_display_print_msg("TPort");
+			asynth_display_print_msg("Target Port");
 			asynth_display_print_cue(net_cfg.target_port);
 			break;
 		case MENU_ITEM_NET_DEVICE_IP4:
-			asynth_display_print_msg("D IP ");
+			asynth_display_print_msg("Device IP");
 			asynth_display_print_cue(net_cfg.device_ip4);
 			break;
 		case MENU_ITEM_NET_DEVICE_PORT:
-			asynth_display_print_msg("DPort");
+			asynth_display_print_msg("Device Port");
 			asynth_display_print_cue(net_cfg.device_port);
 			break;
 		case MENU_ITEM_NET_CIDR_MASK:
-			asynth_display_print_msg("CIDR ");
+			asynth_display_print_msg("CIDR Mask");
 			asynth_display_print_cue(net_cfg.cidr_mask);
 			break;
 		case MENU_ITEM_NET_IP_B1:
-			asynth_display_print_msg("IPb1 ");
+			asynth_display_print_msg("IP byte 1 ");
 			asynth_display_print_cue(net_cfg.ip_b1);
 			break;
 		case MENU_ITEM_NET_IP_B2:
-			asynth_display_print_msg("IPb2 ");
+			asynth_display_print_msg("IP byte 2 ");
 			asynth_display_print_cue(net_cfg.ip_b2);
 			break;
 		case MENU_ITEM_NET_IP_B3:
-			asynth_display_print_msg("IPb3 ");
+			asynth_display_print_msg("IP byte 3 ");
 			asynth_display_print_cue(net_cfg.ip_b3);
 			break;
 		default:
 		// Should not happen, but clear the area if it does.
-			asynth_display_print_msg("     ");
+			asynth_display_print_msg("");
 			asynth_display_print_cue(0);
 			break;
 		}
@@ -1026,12 +1299,12 @@ static void ui_exit_menu_mode(void)
 
 static void cue_send_recall(uint16_t cue_value)
 {
-	char msg_buf[32];
+	int ret;
 
-	snprintf(msg_buf, sizeof(msg_buf), "Recall Cue #%u", (unsigned int)cue_value);
-	asynth_display_print_msg(msg_buf);
-
-	/* Dedicated hook for future cue-recall side effects (OSC, etc.). */
+	ret = app_osc_send_cue(cue_value);
+	if (ret < 0 && ret != -ENOTSUP) {
+		printk("OSC send Cue failed (%d)\n", ret);
+	}
 }
 
 static void printTempCueBlink(uint16_t cue_value, bool visible)
@@ -1054,7 +1327,8 @@ static void cue_pending_cancel(bool show_status)
 	asynth_display_print_cue(current_cue_value);
 
 	if (show_status) {
-		asynth_display_print_msg("Cue cancel");
+		// time out cancel, do nothing. 
+		//asynth_display_print_msg("Cue cancel");
 	}
 }
 
