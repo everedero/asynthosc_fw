@@ -139,8 +139,8 @@ const struct device *oled;
 #define OSC_PATH_MIDI_MMC            "/asynth/midi/MMC"
 #define OSC_PATH_MIDI_MTC_QF         "/asynth/midi/MTC/QF"
 #define OSC_PATH_MIDI_MTC_FF         "/asynth/midi/MTC/fullFrame"
-#define OSC_PATH_PING               "/asynth/ping"
-#define OSC_PATH_PONG               "/asynth/pong"
+#define OSC_PATH_PING               "/ping"
+#define OSC_PATH_PONG               "/pong"
 #define OSC_PATH_MSG                "/asynth/msg"
 #define OSC_PATH_CUE                "/asynth/cue"
 
@@ -257,6 +257,7 @@ static struct net_mgmt_event_callback app_net_mgmt_cb;
 static int app_osc_sock_fd = -1;
 static struct sockaddr_in app_osc_remote_addr;
 static bool app_osc_remote_addr_ready;
+static bool app_osc_sock_bound;
 
 static bool app_network_ready_for_tx(void)
 {
@@ -284,6 +285,11 @@ static bool app_network_ready_for_tx(void)
 static uint16_t app_osc_target_port(void)
 {
 	return (uint16_t)(NET_SETTINGS_PORT_BASE + net_cfg.target_port);
+}
+
+static uint16_t app_osc_device_port(void)
+{
+	return (uint16_t)(NET_SETTINGS_PORT_BASE + net_cfg.device_port);
 }
 
 static int app_osc_update_remote_addr(void)
@@ -315,6 +321,7 @@ static int app_osc_update_remote_addr(void)
 
 static int app_osc_ensure_socket_and_target(void)
 {
+	struct sockaddr_in bind_addr;
 	int ret;
 
 	if (app_osc_sock_fd < 0) {
@@ -325,6 +332,28 @@ static int app_osc_ensure_socket_and_target(void)
 		}
 	}
 
+	if (!app_osc_sock_bound) {
+		memset(&bind_addr, 0, sizeof(bind_addr));
+		bind_addr.sin_family = AF_INET;
+		bind_addr.sin_port = htons(app_osc_device_port());
+		bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+		ret = zsock_bind(app_osc_sock_fd,
+					 (struct sockaddr *)&bind_addr,
+					 sizeof(bind_addr));
+		if (ret < 0) {
+			ret = -errno;
+			printk("OSC: bind failed on port %u (%d)\n",
+			       (unsigned int)app_osc_device_port(), ret);
+			(void)zsock_close(app_osc_sock_fd);
+			app_osc_sock_fd = -1;
+			return ret;
+		}
+
+		app_osc_sock_bound = true;
+		printk("OSC RX: listening on UDP %u\n", (unsigned int)app_osc_device_port());
+	}
+
 	if (!app_osc_remote_addr_ready) {
 		ret = app_osc_update_remote_addr();
 		if (ret < 0) {
@@ -333,6 +362,177 @@ static int app_osc_ensure_socket_and_target(void)
 	}
 
 	return 0;
+}
+
+static int app_osc_send_pong(const struct sockaddr_in *remote_addr, socklen_t remote_len)
+{
+	char packet[64];
+	int len;
+	int ret;
+	const struct sockaddr_in *target_addr;
+	socklen_t target_len;
+
+	ARG_UNUSED(remote_addr);
+	ARG_UNUSED(remote_len);
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	target_addr = &app_osc_remote_addr;
+	target_len = sizeof(app_osc_remote_addr);
+
+	len = tosc_writeMessage(packet, sizeof(packet), OSC_PATH_PONG, "");
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	ret = zsock_sendto(app_osc_sock_fd,
+				 packet,
+				 (size_t)len,
+				 0,
+				 (const struct sockaddr *)target_addr,
+				 target_len);
+	if (ret < 0) {
+		return -errno;
+	}
+
+	return 0;
+}
+
+static bool app_osc_handle_rx_message(tosc_message *msg,
+				      const struct sockaddr_in *remote_addr,
+				      socklen_t remote_len)
+{
+	const char *address = tosc_getAddress(msg);
+	const char *format = tosc_getFormat(msg);
+	const char *text;
+	int ret;
+
+	if (address == NULL) {
+		return false;
+	}
+
+	if (strcmp(address, OSC_PATH_PING) == 0) {
+		ret = app_osc_send_pong(remote_addr, remote_len);
+		if (ret < 0) {
+			printk("OSC RX: /ping -> /pong failed (%d)\n", ret);
+		}
+		return false;
+	}
+
+	if (strcmp(address, OSC_PATH_MSG) != 0) {
+		printk("OSC RX: unhandled path '%s'\n", address);
+		return false;
+	}
+
+	if ((format == NULL) || (format[0] != 's')) {
+		printk("OSC RX: /msg expects OSC string\n");
+		return false;
+	}
+
+	text = tosc_getNextString(msg);
+	if (text == NULL) {
+		text = "";
+	}
+
+	ret = asynth_display_print_msg(text);
+	if (ret < 0) {
+		printk("OSC RX: display print failed (%d)\n", ret);
+		return false;
+	}
+
+	return true;
+}
+
+static bool app_osc_process_packet(char *packet,
+				   int len,
+				   const struct sockaddr_in *remote_addr,
+				   socklen_t remote_len)
+{
+	tosc_message msg;
+	tosc_bundle bundle;
+	bool ui_dirty = false;
+	int ret;
+
+	if ((packet == NULL) || (len <= 0)) {
+		return false;
+	}
+
+	if (tosc_isBundle(packet)) {
+		tosc_parseBundle(&bundle, packet, len);
+		while (tosc_getNextMessage(&bundle, &msg)) {
+			if (app_osc_handle_rx_message(&msg, remote_addr, remote_len)) {
+				ui_dirty = true;
+			}
+		}
+		return ui_dirty;
+	}
+
+	ret = tosc_parseMessage(&msg, packet, len);
+	if (ret < 0) {
+		printk("OSC RX: parse failed (%d)\n", ret);
+		return false;
+	}
+
+	if (app_osc_handle_rx_message(&msg, remote_addr, remote_len)) {
+		ui_dirty = true;
+	}
+
+	return ui_dirty;
+}
+
+static bool app_osc_poll_rx(void)
+{
+	char packet[256];
+	struct sockaddr_in remote_addr;
+	socklen_t remote_len;
+	int len;
+	int ret;
+	bool ui_dirty = false;
+	uint8_t i;
+
+	if (!app_network_ready_for_tx()) {
+		return false;
+	}
+
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return false;
+	}
+
+	for (i = 0U; i < 4U; i++) {
+		remote_len = sizeof(remote_addr);
+		len = zsock_recvfrom(app_osc_sock_fd,
+				    packet,
+				    sizeof(packet),
+				    ZSOCK_MSG_DONTWAIT,
+				    (struct sockaddr *)&remote_addr,
+				    &remote_len);
+		if (len < 0) {
+			if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+				break;
+			}
+
+			printk("OSC RX: recvfrom failed (%d)\n", errno);
+			break;
+		}
+
+		if (len == 0) {
+			continue;
+		}
+
+		if (app_osc_process_packet(packet, len, &remote_addr, remote_len)) {
+			ui_dirty = true;
+		}
+	}
+
+	return ui_dirty;
 }
 
 static void app_print_ipv4_status(struct net_if *iface)
@@ -906,6 +1106,11 @@ static int app_osc_send_cue(uint16_t cue_value)
 {
 	ARG_UNUSED(cue_value);
 	return -ENOTSUP;
+}
+
+static bool app_osc_poll_rx(void)
+{
+	return false;
 }
 
 static int app_osc_send_midi_note_on(uint8_t channel, uint8_t pitch, uint8_t velocity)
@@ -2175,6 +2380,10 @@ int main(void)
 		asynth_midi_sample_uart_errors();
 
 		if (asynth_midi_process_events()) {
+			ui_dirty = true;
+		}
+
+		if (app_osc_poll_rx()) {
 			ui_dirty = true;
 		}
 

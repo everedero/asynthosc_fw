@@ -10,10 +10,14 @@
 #include <stdio.h>
 #include <string.h>
 
-#define UI_STATUS_MSG_VISIBLE_CHARS      5U
+#define UI_STATUS_MSG_VISIBLE_CHARS      8U
 #define UI_STATUS_MSG_MAX_LEN            64U
 #define UI_STATUS_MSG_SCROLL_GAP         3U
 #define UI_STATUS_MSG_SCROLL_INTERVAL_MS 180U
+
+#define UI_STATUS_MSG_FONT_IDX           0U
+#define UI_STATUS_MSG_X                  0U
+#define UI_STATUS_MSG_Y                  33U
 
 #define TRIGGER_BLINK_DURATION_MS        100U
 
@@ -65,9 +69,9 @@ static int asynth_display_render_msg_window(void)
 	}
 
 	window[UI_STATUS_MSG_VISIBLE_CHARS] = '\0';
-	cfb_framebuffer_set_font(oled, 1);
+	cfb_framebuffer_set_font(oled, UI_STATUS_MSG_FONT_IDX);
 	cfb_set_kerning(oled, 0);
-	cfb_print(oled, window, 0, 27);
+	cfb_print(oled, window, UI_STATUS_MSG_X, UI_STATUS_MSG_Y);
 	return 0;
 }
 
