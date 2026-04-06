@@ -18,6 +18,7 @@
 #if defined(CONFIG_NETWORKING)
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/conn_mgr_monitor.h>
 #include <zephyr/net/net_event.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/socket.h>
@@ -63,6 +64,7 @@ const struct device *oled;
 #define ROTARY_DETENT_STEPS   4
 #define CUE_PENDING_TIMEOUT_MS 5000U
 #define CUE_PENDING_BLINK_INTERVAL_MS 300U
+#define SPLASH_SCREEN_DURATION_MS 500U
 
 #define TRIGGER_EVENT_LOG_ENABLE         0U
 #define BUTTON_EVENT_LOG_ENABLE          0U
@@ -96,10 +98,10 @@ const struct device *oled;
 #define NET_SETTINGS_IP_MODE_MAX             2U
 
 #define NET_SETTINGS_DEFAULT_IP_MODE         0U
-#define NET_SETTINGS_DEFAULT_TARGET_IP4      71U
-#define NET_SETTINGS_DEFAULT_TARGET_PORT     1U
-#define NET_SETTINGS_DEFAULT_DEVICE_IP4      72U
-#define NET_SETTINGS_DEFAULT_DEVICE_PORT     2U
+#define NET_SETTINGS_DEFAULT_TARGET_IP4      100U
+#define NET_SETTINGS_DEFAULT_TARGET_PORT     10U
+#define NET_SETTINGS_DEFAULT_DEVICE_IP4      42U
+#define NET_SETTINGS_DEFAULT_DEVICE_PORT     11U
 #define NET_SETTINGS_DEFAULT_CIDR_MASK       24U
 #define NET_SETTINGS_DEFAULT_IP_B1           192U
 #define NET_SETTINGS_DEFAULT_IP_B2           168U
@@ -194,6 +196,34 @@ static bool rot_press_tracking;
 static bool rot_button_was_pressed_last_poll;
 static int8_t rot_encoder_step_accum;
 
+volatile uint32_t app_boot_stage;
+volatile int32_t app_boot_error_code;
+
+#define APP_BOOT_STAGE_ENTER_MAIN            0x01U
+#define APP_BOOT_STAGE_GPIO_READY            0x02U
+#define APP_BOOT_STAGE_UI_READY              0x03U
+#define APP_BOOT_STAGE_TRIGGERS_READY        0x04U
+#define APP_BOOT_STAGE_SETTINGS_READY        0x05U
+#define APP_BOOT_STAGE_MIDI_READY            0x06U
+#define APP_BOOT_STAGE_DISPLAY_READY         0x07U
+#define APP_BOOT_STAGE_SPLASH_DONE           0x08U
+#define APP_BOOT_STAGE_CV_READY              0x09U
+#define APP_BOOT_STAGE_NET_READY             0x0AU
+#define APP_BOOT_STAGE_OSC_READY             0x0BU
+#define APP_BOOT_STAGE_MAIN_LOOP             0x0CU
+
+static void app_boot_mark(uint32_t stage)
+{
+	app_boot_stage = stage;
+	app_boot_error_code = 0;
+}
+
+static void app_boot_mark_error(uint32_t stage, int err)
+{
+	app_boot_stage = stage;
+	app_boot_error_code = err;
+}
+
 #if defined(CONFIG_NETWORKING)
 #define APP_NET_EVENT_MASK (NET_EVENT_IF_UP | NET_EVENT_IF_DOWN | \
 			    NET_EVENT_L4_CONNECTED | NET_EVENT_L4_DISCONNECTED | \
@@ -204,6 +234,29 @@ static int app_osc_sock_fd = -1;
 static struct sockaddr_in app_osc_remote_addr;
 static bool app_osc_remote_addr_ready;
 
+static bool app_network_ready_for_tx(void)
+{
+	struct net_if *iface = net_if_get_default();
+
+	if (iface == NULL) {
+		return false;
+	}
+
+	if (!net_if_is_up(iface)) {
+		return false;
+	}
+
+	if (net_if_oper_state(iface) != NET_IF_OPER_UP) {
+		return false;
+	}
+
+	if (!net_if_is_carrier_ok(iface)) {
+		return false;
+	}
+
+	return net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED) != NULL;
+}
+
 static uint16_t app_osc_target_port(void)
 {
 	return (uint16_t)(NET_SETTINGS_PORT_BASE + net_cfg.target_port);
@@ -211,7 +264,7 @@ static uint16_t app_osc_target_port(void)
 
 static int app_osc_update_remote_addr(void)
 {
-	char ip_str[16];
+	char ip_str[24];
 	uint16_t port = app_osc_target_port();
 	int ret;
 
@@ -342,6 +395,10 @@ static int app_network_init(void)
 				     APP_NET_EVENT_MASK);
 	net_mgmt_add_event_callback(&app_net_mgmt_cb);
 
+	if (IS_ENABLED(CONFIG_NET_CONNECTION_MANAGER)) {
+		conn_mgr_mon_resend_status();
+	}
+
 	link_addr = net_if_get_link_addr(iface);
 	if (link_addr && link_addr->len == 6U) {
 		printk("NET: MAC=%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -370,6 +427,10 @@ static int app_osc_transport_send_cv(uint8_t cv_index, float normalized)
 
 	if (cv_index >= CV_CHANNEL_COUNT) {
 		return -EINVAL;
+	}
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
 	}
 
 	ret = app_osc_ensure_socket_and_target();
@@ -406,6 +467,10 @@ static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
 
 	if (trigger_index > 1U) {
 		return -EINVAL;
+	}
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
 	}
 
 	ret = app_osc_ensure_socket_and_target();
@@ -693,7 +758,7 @@ static void adc_settings_log_current(const char *origin)
 	       (unsigned int)hyst_mv);
 }
 
-static int net_settings_init(void)
+static int __unused net_settings_init(void)
 {
 	int ret;
 
@@ -724,6 +789,14 @@ static int net_settings_init(void)
 	adc_settings_log_current("startup");
 
 	return 0;
+}
+
+static void net_settings_use_defaults(void)
+{
+	net_settings_clamp_all();
+	net_settings_ready = false;
+	net_settings_log_current("defaults");
+	adc_settings_log_current("defaults");
 }
 
 static uint16_t menu_wrap_u16_step(uint16_t value, uint16_t min_val, uint16_t max_val, int8_t direction)
@@ -1383,6 +1456,15 @@ static bool process_trigger_events(void)
 	return ui_dirty;
 }
 
+FUNC_NORETURN static void app_fatal_stop(const char *stage, int err)
+{
+	app_boot_mark_error(app_boot_stage, err);
+	printk("APP FATAL: %s (%d)\n", stage, err);
+	while (1) {
+		k_sleep(K_MSEC(1000));
+	}
+}
+
 /**
  * Main loop
  * 
@@ -1408,6 +1490,9 @@ int main(void)
 		.rot_encoder_b = &rot_encoder_b,
 	};
 
+	app_boot_mark(APP_BOOT_STAGE_ENTER_MAIN);
+	printk("APP MAIN START\n");
+
 	// log the current build version in the console for easy reference
 	printk("Asynth2OSC build: %s\n", ASYNTH_BUILD_ID);
 
@@ -1417,56 +1502,63 @@ int main(void)
 	// turn them off
 	ret = gpio_pin_toggle_dt(&right_led);
 	if (ret < 0) {
-		return 0;
+		printk("WARN: right LED toggle failed (%d)\n", ret);
 	}
+	app_boot_mark(APP_BOOT_STAGE_GPIO_READY);
 	ret = gpio_pin_toggle_dt(&left_led);
 	if (ret < 0) {
-		return 0;
+		printk("WARN: left LED toggle failed (%d)\n", ret);
 	}
 
 	ret = asynth_ui_input_init(&ui_pins, BUTTON_DEBOUNCE_MS);
+	app_boot_mark(APP_BOOT_STAGE_UI_READY);
 	if (ret < 0) {
 		printk("UI input init failed (%d)\n", ret);
-		return 0;
+		app_fatal_stop("ui_input_init", ret);
 	}
 
 	ret = triggers_init();
+	app_boot_mark(APP_BOOT_STAGE_TRIGGERS_READY);
 	if (ret < 0) {
 		printk("Trigger input init failed (%d)\n", ret);
-		return 0;
+		app_fatal_stop("triggers_init", ret);
 	}
 
+	app_boot_mark(APP_BOOT_STAGE_SETTINGS_READY);
+	ret = net_settings_init();
+	if (ret < 0) {
+		printk("NETCFG: using defaults (%d)\n", ret);
+		net_settings_use_defaults();
+	}
+
+	app_boot_mark(APP_BOOT_STAGE_MIDI_READY);
 	ret = asynth_midi_init();
 	if (ret < 0) {
 		printk("MIDI IN: disabled (%d)\n", ret);
 	}
 
-	ret = net_settings_init();
-	if (ret < 0) {
-		printk("NETCFG: using defaults (%d)\n", ret);
-	}
-
 	// Intialize Oled screen
 	oled = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 	if (!device_is_ready(oled)) {
-		return 0;
+		app_fatal_stop("display_not_ready", -ENODEV);
 	}
 
 	if (display_set_pixel_format(oled, PIXEL_FORMAT_MONO10) != 0) {
 		if (display_set_pixel_format(oled, PIXEL_FORMAT_MONO01) != 0) {
-			return 0;
+			app_fatal_stop("display_set_pixel_format", -EIO);
 		}
 	}
 
 	if (cfb_framebuffer_init(oled)) {
-		return 0;
+		app_fatal_stop("cfb_framebuffer_init", -EIO);
 	}
 
 	ret = asynth_display_init(oled);
 	if (ret < 0) {
 		printk("Display helper init failed (%d)\n", ret);
-		return 0;
+		app_fatal_stop("asynth_display_init", ret);
 	}
+	app_boot_mark(APP_BOOT_STAGE_DISPLAY_READY);
 
 	cfb_framebuffer_clear(oled, true);
 	display_blanking_off(oled);
@@ -1499,9 +1591,10 @@ int main(void)
 	cfb_print(oled, ASYNTH_BUILD_ID, 0, 16 * 3);
 	cfb_invert_area(oled, 0, 0, 128, 16*1);
 	cfb_framebuffer_finalize(oled);
-	k_sleep(K_MSEC(2000));
+	k_sleep(K_MSEC(SPLASH_SCREEN_DURATION_MS));
 	cfb_framebuffer_clear(oled, true);
 	cfb_framebuffer_finalize(oled);
+	app_boot_mark(APP_BOOT_STAGE_SPLASH_DONE);
 
 	// draw four rectangles for CV level monitoring
 	for (int i = 0; i < 4; i++)
@@ -1544,21 +1637,38 @@ int main(void)
 
 	ret = asynth_cv_init(oled);
 	if (ret < 0) {
-		return 0;
+		app_fatal_stop("asynth_cv_init", ret);
 	}
+	app_boot_mark(APP_BOOT_STAGE_CV_READY);
 
 #if defined(CONFIG_NETWORKING)
 	ret = app_network_init();
 	if (ret < 0) {
 		printk("NET: initialization failed (%d)\n", ret);
 	}
+	app_boot_mark(APP_BOOT_STAGE_NET_READY);
+	
+	/* Initialize OSC remote address with static IPs for initial testing */
+	ret = app_osc_update_remote_addr();
+	if (ret == 0) {
+		printk("OSC: initial target address configured: %u.%u.%u.%u:%u\n",
+		       (unsigned int)net_cfg.ip_b1,
+		       (unsigned int)net_cfg.ip_b2,
+		       (unsigned int)net_cfg.ip_b3,
+		       (unsigned int)net_cfg.target_ip4,
+		       (unsigned int)app_osc_target_port());
+	} else {
+		printk("OSC: failed to configure target address (%d)\n", ret);
+	}
 #else
 	printk("NET: networking is disabled in this build\n");
 #endif
 
 	app_osc_transport_configure();
+	app_boot_mark(APP_BOOT_STAGE_OSC_READY);
 
 	next_cv_sample_ms = k_uptime_get();
+	app_boot_mark(APP_BOOT_STAGE_MAIN_LOOP);
 
 	/* 
 	*	Main infinite loop

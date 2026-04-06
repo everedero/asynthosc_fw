@@ -21,7 +21,8 @@
 		zephyr,sram = &sram0;
 		zephyr,flash = &flash0;
 		zephyr,dtcm = &dtcm;
-		zephyr,code-partition = &slot0_partition;
+		zephyr,code-partition = &app_partition;
+		zephyr,settings-partition = &qspi_settings_partition;
 		zephyr,display = &ssd1306;
 		zephyr,flash-controller = &w25q32jvss;
 	};
@@ -278,6 +279,17 @@ zephyr_udc0: &usbotg_fs {
 		spi-bus-width = <4>;
 		reset-cmd;
 		writeoc = "PP_1_1_4";
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			qspi_settings_partition: partition@0 {
+				label = "settings_storage";
+				reg = <0x00000000 DT_SIZE_K(256)>;
+			};
+		};
 	};
 };
 
@@ -295,35 +307,16 @@ zephyr_udc0: &usbotg_fs {
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		/* 128KB for bootloader */
-		boot_partition: partition@0 {
-			label = "mcuboot";
-			reg = <0x00000000 DT_SIZE_K(128)>;
-			read-only;
+		/* Direct-boot application region in internal flash. */
+		app_partition: partition@0 {
+			label = "app";
+			reg = <0x00000000 DT_SIZE_K(1536)>;
 		};
 
-		/* storage: 256KB for settings */
-		storage_partition: partition@20000 {
+		/* Persistent settings storage kept separate from the app image. */
+		storage_partition: partition@180000 {
 			label = "storage";
-			reg = <0x00020000 DT_SIZE_K(256)>;
-		};
-
-		/* application image slot: 256KB */
-		slot0_partition: partition@60000 {
-			label = "image-0";
-			reg = <0x00060000 DT_SIZE_K(256)>;
-		};
-
-		/* backup slot: 256KB */
-		slot1_partition: partition@a0000 {
-			label = "image-1";
-			reg = <0x000a0000 DT_SIZE_K(256)>;
-		};
-
-		/* swap slot: 128KB */
-		scratch_partition: partition@e0000 {
-			label = "image-scratch";
-			reg = <0x000e0000 DT_SIZE_K(128)>;
+			reg = <0x00180000 DT_SIZE_K(256)>;
 		};
 
 	};
