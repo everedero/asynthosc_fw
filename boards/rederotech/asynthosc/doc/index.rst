@@ -60,12 +60,12 @@ Default Zephyr Peripheral Mapping:
 Board is configured as follows:
 
 - UART4 RX MIDI in: PD0
-- Buttons 1, 2 inputs: PD2, PD12
-- Button 1, 2 LEDs: PD3, PD11
+- Right/left pushbuttons: PD3, PD12 (both ``GPIO_ACTIVE_LOW``)
+- Right/left button LEDs: PD2, PD11 (both ``GPIO_ACTIVE_LOW``)
 - Rotary encoder A, B: PD14 (TIM4_CH3), PC8 (TIM3_CH3, TIM8_CH3): Issue
  90: TIM3 CH1 (remove nRST jumper and solder to ROT B)
  91: TIM3 CH2 is FREE, can also be exchanged with 90 to ease routing
-- Rotary encoder pushbutton: PA8
+- Rotary encoder pushbutton: PA8 (``GPIO_ACTIVE_LOW | GPIO_PULL_UP``)
 - Display power enable: PD9 (from 5V)
 - Display SPI2 MOSI, MISO, SCK, nCS: PB15, PB14, PB10, PC7
 - Display GPIO nRST, DC: PC6, PD15
@@ -77,7 +77,11 @@ Board is configured as follows:
 - Debug LED: PC2C
 - Debug UART2 TX, RX: PD5, PD6
 
-- CV input 1, 2, 3, 4: PA0 (ADC1 IN0), PA3 (ADC1 IN5), PA5 (ADC IN6), PC0 (ADC1 IN9)
+- CV input scan order (``/zephyr,user cv-channel-ids``): CV1 = PA0 (ADC1 IN16), CV2 = PA5
+   (ADC1 IN19), CV3 = PA6 (ADC1 IN3), CV4 = PA3 (ADC1 IN15)
+- CV display and OSC remap (``/zephyr,user cv-display-remap``): ``<0 2 3 1>``
+- The application uses one remap source for both UI bars and OSC CV index routing.
+- ``cv-osc-remap`` is no longer used by ``app/src/main.c``.
 - Trigger input 1, 2: PE13 (TIM1 CH3), PE14 (TIM1 CH4)
 - DAC output: PA4 (DAC OUT1)
 
