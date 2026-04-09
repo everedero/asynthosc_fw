@@ -304,8 +304,7 @@ Channels are exported as 1–16 to match visible MIDI conventions.
 
 | Path | Arguments | Meaning |
 |------|-----------|---------|
-| `/note` | `int channel, int pitch, int velocity` | Note On (velocity 1–127) or Note Off (velocity = 0) |
-| `/note_off` | `int channel, int pitch, int velocity` | Explicit Note Off (optional form, velocity = 0) |
+| `/note` | `int channel, int pitch, int velocity` | Note On (velocity 1–127) **or** Note Off (velocity = 0) |
 | `/control` | `int channel, int controller, int value` | Control Change |
 | `/program` | `int channel, int program` | Program Change, program 0–127 |
 | `/pitch` | `int channel, int value` | Pitch Bend, value 0–16383, 8192 = center |
@@ -331,7 +330,7 @@ Notes:
 
 - MIDI note on/off forwarding depends on the `MIDI Note` menu setting
 - CC, Program Change, Pitch Bend, Transport, and MTC forwarding are always active
-- Note Off is sent as `/note` with velocity = 0 (instead of dedicated message)
+- Note Off is sent as `/note` with velocity = 0; there is no separate `/note_off` message
 - MMC Play/Deferred Play maps to `/start`; MMC Stop/Pause maps to `/stop`
 - Pitch Bend value is the raw 14-bit MIDI value (0–16383); 8192 is the neutral center
 
