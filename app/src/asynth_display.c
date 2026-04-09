@@ -18,6 +18,9 @@
 #define UI_STATUS_MSG_FONT_IDX           0U
 #define UI_STATUS_MSG_X                  0U
 #define UI_STATUS_MSG_Y                  33U
+#define UI_NET_FONT_IDX                  0U
+#define UI_NET_X                         68U
+#define UI_NET_Y                         0U
 
 #define TRIGGER_BLINK_DURATION_MS        100U
 
@@ -27,11 +30,15 @@ static bool trigger_1_active;
 static bool trigger_2_active;
 static bool midi_active;
 static bool audio_active;
+static bool audio_latched_on;
+static bool net_latched_on;
+static bool net_active;
 
 static uint32_t trigger_1_blink_end_ms;
 static uint32_t trigger_2_blink_end_ms;
 static uint32_t midi_blink_end_ms;
 static uint32_t audio_blink_end_ms;
+static uint32_t net_blink_end_ms;
 
 static char ui_status_msg[UI_STATUS_MSG_MAX_LEN + 1] = "";
 static size_t ui_status_msg_len;
@@ -211,6 +218,53 @@ void asynth_display_act_a(void)
 	audio_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
 }
 
+void asynth_display_set_a(bool on)
+{
+	if (!asynth_display_ready()) {
+		return;
+	}
+
+	if (audio_latched_on == on) {
+		return;
+	}
+
+	cfb_invert_area(oled, 104, 0, 11, 14);
+	audio_latched_on = on;
+
+	/* Cancel transient blink state when forcing a persistent visual state. */
+	audio_active = false;
+	audio_blink_end_ms = 0U;
+}
+
+void asynth_display_set_n(bool on)
+{
+	if (!asynth_display_ready()) {
+		return;
+	}
+
+	if (net_latched_on == on) {
+		return;
+	}
+
+	cfb_framebuffer_set_font(oled, UI_NET_FONT_IDX);
+	cfb_set_kerning(oled, 2);
+	cfb_print(oled, on ? "N" : " ", UI_NET_X, UI_NET_Y);
+	net_latched_on = on;
+	net_active = false;
+	net_blink_end_ms = 0U;
+}
+
+void asynth_display_act_n(void)
+{
+	if (!asynth_display_ready() || !net_latched_on) {
+		return;
+	}
+
+	cfb_invert_area(oled, UI_NET_X, UI_NET_Y, 11, 14);
+	net_active = true;
+	net_blink_end_ms = k_uptime_get_32() + TRIGGER_BLINK_DURATION_MS;
+}
+
 bool asynth_display_tick_activity(uint32_t now_ms)
 {
 	bool ui_dirty = false;
@@ -243,6 +297,12 @@ bool asynth_display_tick_activity(uint32_t now_ms)
 		ui_dirty = true;
 	}
 
+	if (net_active && (now_ms >= net_blink_end_ms)) {
+		cfb_invert_area(oled, UI_NET_X, UI_NET_Y, 11, 14);
+		net_active = false;
+		ui_dirty = true;
+	}
+
 	return ui_dirty;
 }
 
@@ -252,8 +312,12 @@ void asynth_display_reset_activity(void)
 	trigger_2_active = false;
 	midi_active = false;
 	audio_active = false;
+	audio_latched_on = false;
+	net_latched_on = false;
+	net_active = false;
 	trigger_1_blink_end_ms = 0U;
 	trigger_2_blink_end_ms = 0U;
 	midi_blink_end_ms = 0U;
 	audio_blink_end_ms = 0U;
+	net_blink_end_ms = 0U;
 }

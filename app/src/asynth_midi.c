@@ -180,22 +180,39 @@ static void midi_dispatch_sysex(const uint8_t *buf, uint8_t len)
 		return;
 	}
 
-	/* MMC: F0 7F <devID> 06 <cmd> F7 → buf={7F devID 06 cmd}, len=4 */
+	/* MMC: F0 7F <devID> 06 <cmd> F7 → buf={7F devID 06 cmd}, len=4
+	 * Map MMC transport commands to spec transport OSC paths. */
 	if (buf[2] == 0x06U) {
-		(void)asynth_osc_send_midi_mmc(buf[1], buf[3]);
+		switch (buf[3]) {
+		case 0x02U: /* Play */
+		case 0x03U: /* Deferred Play */
+			(void)asynth_osc_send_midi_start();
+			break;
+		case 0x01U: /* Stop */
+		case 0x09U: /* Pause */
+			(void)asynth_osc_send_midi_stop();
+			break;
+		default:
+			break;
+		}
 		return;
 	}
 
 	/* MTC Full Frame: F0 7F <devID> 01 01 <hr> <mn> <se> <fr> F7
 	 * → buf={7F devID 01 01 hr mn se fr}, len=8
-	 * packed = (hr << 24) | (mn << 16) | (se << 8) | fr
-	 * hr byte encodes frame rate (bits 6-5) and hours (bits 4-0). */
+	 * hr byte encodes frame rate (bits 6-5) and hours (bits 4-0).
+	 * fps codes: 00=24, 01=25, 10=30DF (29.97), 11=30. */
 	if (len >= 8U && buf[2] == 0x01U && buf[3] == 0x01U) {
-		uint32_t packed = ((uint32_t)buf[4] << 24) |
-				  ((uint32_t)buf[5] << 16) |
-				  ((uint32_t)buf[6] <<  8) |
-				   (uint32_t)buf[7];
-		(void)asynth_osc_send_midi_mtc_ff(packed);
+		static const uint8_t fps_table[] = {24U, 25U, 30U, 30U};
+		uint8_t hr = buf[4];
+		uint8_t fps = fps_table[(hr >> 5) & 0x03U];
+
+		(void)asynth_osc_send_midi_mtc_ff(
+			hr & 0x1FU,
+			buf[5],
+			buf[6],
+			buf[7],
+			fps);
 		return;
 	}
 }
@@ -205,8 +222,24 @@ static void midi_parse_and_dispatch(uint8_t byte)
 	struct asynth_midi_msg msg;
 	uint8_t status_nibble;
 
-	/* System Real-Time (0xF8-0xFF): single byte, ignore */
+	/* System Real-Time (0xF8-0xFF): single byte, dispatch to OSC transport. */
 	if (byte >= 0xF8U) {
+		switch (byte) {
+		case 0xF8U: /* MIDI Clock */
+			(void)asynth_osc_send_midi_clock();
+			break;
+		case 0xFAU: /* Start */
+			(void)asynth_osc_send_midi_start();
+			break;
+		case 0xFBU: /* Continue */
+			(void)asynth_osc_send_midi_continue();
+			break;
+		case 0xFCU: /* Stop */
+			(void)asynth_osc_send_midi_stop();
+			break;
+		default:
+			break;
+		}
 		return;
 	}
 
@@ -270,6 +303,18 @@ static void midi_parse_and_dispatch(uint8_t byte)
 		return;
 	}
 
+	/* Song Position Pointer: 0xF2, 2 data bytes (LSB first), 14-bit value */
+	if (midi_running_status == 0xF2U) {
+		if (midi_data_count >= 2) {
+			uint16_t pos = (uint16_t)(midi_data_bytes[0]) |
+				      ((uint16_t)(midi_data_bytes[1]) << 7);
+
+			(void)asynth_osc_send_midi_songpos(pos);
+			midi_data_count = 0;
+		}
+		return;
+	}
+
 	/* Channel messages */
 	switch (status_nibble) {
 	case 0xC0: /* Program Change - 1 data byte */
@@ -322,10 +367,11 @@ static void midi_parse_and_dispatch(uint8_t byte)
 				}
 				(void)asynth_osc_send_midi_cc(msg.channel, msg.data1, msg.data2);
 			} else if (status_nibble == 0xE0) {
-				/* Pitch Bend: LSB in data1, MSB in data2, 14-bit centered at 8192 */
-				int16_t bend = (int16_t)(
-					(int32_t)(((uint16_t)msg.data2 << 7) |
-					           (uint16_t)msg.data1) - 8192);
+				/* Pitch Bend: LSB in data1, MSB in data2.
+				 * Raw 14-bit value 0-16383, 8192=center (spec §8). */
+				uint16_t bend = (uint16_t)(((uint16_t)msg.data2 << 7) |
+							   (uint16_t)msg.data1);
+
 				(void)asynth_osc_send_midi_pitch_bend(msg.channel, bend);
 			}
 

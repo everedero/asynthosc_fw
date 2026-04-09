@@ -17,9 +17,10 @@ The firmware also accepts a small set of incoming OSC commands for remote intera
 ## Main Features
 
 - 4 CV inputs (16 bits ADC, two ranges (-5v,+5v) or (-12v,+12v) by DIP switch selector) sent as normalized OSC floating-point values
-- 2 trigger inputs sent as OSC integer values (0= low, 1=high)
-- MIDI to OSC bridge for note, CC, program change, pitch bend, MMC, and MTC
+- 2 trigger inputs sent as OSC boolean values (`F`=low, `T`=high)
+- MIDI to OSC bridge for note, CC, program change, pitch bend, transport (clock/start/stop/continue), song position, and MTC
 - Incoming OSC parser with on screen messenger
+- On-screen network monitor (`N`) with link state and packet activity blink
 - Cue recall system with direct front-panel control
 - Persistent settings storage for network, ADC, MIDI note forwarding, and current cue
 - OLED input monitor, CV metering and status line with automatic scrolling for long messages
@@ -32,17 +33,18 @@ The OLED is divided into several functional areas:
 
 - Top-left: 3-digit cue number
 - Right side: 4 vertical CV bar meters
-- Top-right: activity indicators labeled `1 M A 2`
+- Top-right: activity indicators labeled `N 1 M A 2`
 - Middle/lower area: scrolling status text
 - Bottom row: soft labels for left, center, and right controls
 
 ### Activity Indicators
 
-The top-right label `1 M A 2` corresponds to:
+The top-right label `N 1 M A 2` corresponds to:
 
+- `N`: Network monitor. Lit when Ethernet link is up, blinks on OSC traffic activity.
 - `1`: Trigger 1 activity
 - `M`: MIDI activity
-- `A`: Audio activity (not in use now, WIP)
+- `A`: DAC output monitor. Lit while `/aout` is greater than `0`.
 - `2`: Trigger 2 activity
 
 ### Status Message Area
@@ -242,12 +244,16 @@ Supported incoming commands:
 | Path | Arguments | Description |
 |------|-----------|-------------|
 | `/ping` | none | Sends `/pong` to the configured OSC target endpoint |
-| `/asynth/msg` | `string` | Displays the provided text on the OLED status line |
-| `/asynth/cue` | `integer` | Remote change the current cue number on device's interface |
+| `/msg` | `string` | Displays the provided text on the OLED status line |
+| `/cue` | `integer` | Remote change the current cue number on device's interface |
+| `/aout` | `float` | Set DAC_OUT1 normalized value (`0.0 .. 1.0`) |
+| `/idle` | none or `bool` | Blink Next button LED at ~4 Hz until Next is pressed |
 
 Notes:
 
 - The incoming parser accepts both single OSC messages and OSC bundles
+- `/aout` values are clamped to `0.0 .. 1.0`
+- OLED `A` indicator is lit while `/aout` value is greater than `0`
 - If an unsupported OSC path is received, the serial log prints:
   - `OSC RX: unhandled path '/path'`
 
@@ -264,23 +270,23 @@ Default transmit endpoint:
 
 | Path | Argument Type | Meaning |
 |------|---------------|---------|
-| `/asynth/cv/1` | `float` | CV input 1 normalized to `0.0 .. 1.0` |
-| `/asynth/cv/2` | `float` | CV input 2 normalized to `0.0 .. 1.0` |
-| `/asynth/cv/3` | `float` | CV input 3 normalized to `0.0 .. 1.0` |
-| `/asynth/cv/4` | `float` | CV input 4 normalized to `0.0 .. 1.0` |
+| `/cv/1` | `float` | CV input 1 normalized to `0.0 .. 1.0` |
+| `/cv/2` | `float` | CV input 2 normalized to `0.0 .. 1.0` |
+| `/cv/3` | `float` | CV input 3 normalized to `0.0 .. 1.0` |
+| `/cv/4` | `float` | CV input 4 normalized to `0.0 .. 1.0` |
 
 ### Trigger Output
 
 | Path | Argument Type | Meaning |
 |------|---------------|---------|
-| `/asynth/trig/1` | `int` | Trigger 1 state, `0` or `1` |
-| `/asynth/trig/2` | `int` | Trigger 2 state, `0` or `1` |
+| `/trig/1` | `bool` | Trigger 1 state, `F` (low) or `T` (high) |
+| `/trig/2` | `bool` | Trigger 2 state, `F` (low) or `T` (high) |
 
 ### Cue Output
 
 | Path | Argument Type | Meaning |
 |------|---------------|---------|
-| `/asynth/cue` | `int` | Current recalled cue value |
+| `/cue` | `int` | Current recalled cue value |
 
 ### Ping Response
 
@@ -290,21 +296,44 @@ Default transmit endpoint:
 
 ### MIDI to OSC Output
 
-| Path Pattern | Argument Type | Meaning |
-|--------------|---------------|---------|
-| `/asynth/midi/noteON/{channel}/{pitch}` | `int` | Velocity |
-| `/asynth/midi/noteOFF/{channel}` | `int` | Pitch |
-| `/asynth/midi/PC/{channel}` | `int` | Program number |
-| `/asynth/midi/CC/{channel}/{number}` | `int` | CC value |
-| `/asynth/midi/pitchBend/{channel}` | `int` | Pitch bend value `-8192 .. +8191` |
-| `/asynth/midi/MMC/{devID}` | `int` | MMC command code |
-| `/asynth/midi/MTC/QF/{piece}` | `int` | Quarter-frame nibble value |
-| `/asynth/midi/MTC/fullFrame` | `int` | Packed full-frame MTC value |
+The MIDI-to-OSC bridge conforms to the **OSC-MIDI Bridge Specification** (see `doc/OSC_bridge_spec.md`).
+All MIDI data are passed as OSC arguments — no MIDI values are encoded in the OSC address.
+Channels are exported as 1–16 to match visible MIDI conventions.
+
+#### Notes and Controllers
+
+| Path | Arguments | Meaning |
+|------|-----------|---------|
+| `/note` | `int channel, int pitch, int velocity` | Note On (velocity 1–127) or Note Off (velocity = 0) |
+| `/note_off` | `int channel, int pitch, int velocity` | Explicit Note Off (optional form, velocity = 0) |
+| `/control` | `int channel, int controller, int value` | Control Change |
+| `/program` | `int channel, int program` | Program Change, program 0–127 |
+| `/pitch` | `int channel, int value` | Pitch Bend, value 0–16383, 8192 = center |
+
+#### Transport and Clock
+
+| Path | Arguments | Meaning |
+|------|-----------|---------|
+| `/clock` | none | MIDI Timing Clock (24 per quarter note) |
+| `/start` | none | MIDI Start / MMC Play |
+| `/stop` | none | MIDI Stop / MMC Stop |
+| `/continue` | none | MIDI Continue |
+| `/songpos` | `int value` | Song Position Pointer (MIDI beats × 6 ticks, 0–16383) |
+
+#### MIDI Time Code
+
+| Path | Arguments | Meaning |
+|------|-----------|---------|
+| `/mtc` | `int hour, int minute, int second, int frame, int fps` | MTC Full Frame (fps: 24, 25, or 30) |
+| `/mtc_qf` | `int piece, int value` | MTC Quarter Frame, piece 0–7, value nibble 0–15 |
 
 Notes:
 
 - MIDI note on/off forwarding depends on the `MIDI Note` menu setting
-- CC, Program Change, Pitch Bend, MMC, and MTC forwarding are active in firmware
+- CC, Program Change, Pitch Bend, Transport, and MTC forwarding are always active
+- Note Off is sent as `/note` with velocity = 0 (instead of dedicated message)
+- MMC Play/Deferred Play maps to `/start`; MMC Stop/Pause maps to `/stop`
+- Pitch Bend value is the raw 14-bit MIDI value (0–16383); 8192 is the neutral center
 
 ## Serial Log Messages
 
@@ -367,5 +396,5 @@ Example tests:
 
 - Send `/ping` to `192.168.1.42:42011`
 - Expect `/pong` on `192.168.1.142:42010`
-- Send `/asynth/msg "Hello"` to `192.168.1.42:42011`
+- Send `/msg "Hello"` to `192.168.1.42:42011`
 - Expect `Hello` on the OLED status line

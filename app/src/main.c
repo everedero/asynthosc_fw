@@ -8,6 +8,7 @@
 #include <zephyr/display/cfb.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/dac.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/util.h>
 #include <app/asynth_cv.h>
@@ -44,6 +45,9 @@ const struct gpio_dt_spec trigger_2 = GPIO_DT_SPEC_GET(DT_NODELABEL(trigger_2), 
 const struct device *oled;
 
 #define CV_CHANNEL_COUNT      4
+#define AOUT_DAC_CHANNEL_ID   1U
+#define AOUT_DAC_RESOLUTION   12U
+#define AOUT_DAC_MAX_VALUE    ((1U << AOUT_DAC_RESOLUTION) - 1U)
 #define CV_BAR_MAX_PIXELS     28U
 #define CV_ADC_RESOLUTION     12U
 #define CV_ADC_MAX_RAW        ((1U << CV_ADC_RESOLUTION) - 1U)
@@ -65,6 +69,9 @@ const struct device *oled;
 #define CUE_PENDING_TIMEOUT_MS 5000U
 #define CUE_PENDING_BLINK_INTERVAL_MS 300U
 #define SPLASH_SCREEN_DURATION_MS 500U
+#define IDLE_LED_TOGGLE_INTERVAL_MS 125U
+#define NET_LINK_POLL_INTERVAL_MS 250U
+#define NET_ACTIVITY_BLINK_MIN_INTERVAL_MS 80U
 
 #define TRIGGER_EVENT_LOG_ENABLE         0U
 #define BUTTON_EVENT_LOG_ENABLE          0U
@@ -125,24 +132,30 @@ const struct device *oled;
 #define CUE_SETTINGS_KEY_CURRENT_VALUE       "asynth/cue/current_value"
 
 /* OSC message paths */
-#define OSC_PATH_CV1                "/asynth/cv/1"
-#define OSC_PATH_CV2                "/asynth/cv/2"
-#define OSC_PATH_CV3                "/asynth/cv/3"
-#define OSC_PATH_CV4                "/asynth/cv/4"
-#define OSC_PATH_TRIGGER1           "/asynth/trig/1"
-#define OSC_PATH_TRIGGER2           "/asynth/trig/2"
-#define OSC_PATH_MIDI_NOTE_ON        "/asynth/midi/noteON"
-#define OSC_PATH_MIDI_NOTE_OFF       "/asynth/midi/noteOFF"
-#define OSC_PATH_MIDI_PC             "/asynth/midi/PC"
-#define OSC_PATH_MIDI_CC             "/asynth/midi/CC"
-#define OSC_PATH_MIDI_PITCH_BEND     "/asynth/midi/pitchBend"
-#define OSC_PATH_MIDI_MMC            "/asynth/midi/MMC"
-#define OSC_PATH_MIDI_MTC_QF         "/asynth/midi/MTC/QF"
-#define OSC_PATH_MIDI_MTC_FF         "/asynth/midi/MTC/fullFrame"
+#define OSC_PATH_CV1                "/cv/1"
+#define OSC_PATH_CV2                "/cv/2"
+#define OSC_PATH_CV3                "/cv/3"
+#define OSC_PATH_CV4                "/cv/4"
+#define OSC_PATH_TRIGGER1           "/trig/1"
+#define OSC_PATH_TRIGGER2           "/trig/2"
+#define OSC_PATH_MIDI_NOTE      "/note"
+#define OSC_PATH_MIDI_NOTE_OFF   "/note_off"
+#define OSC_PATH_MIDI_PC         "/program"
+#define OSC_PATH_MIDI_CC         "/control"
+#define OSC_PATH_MIDI_PITCH_BEND "/pitch"
+#define OSC_PATH_MIDI_CLOCK      "/clock"
+#define OSC_PATH_MIDI_START      "/start"
+#define OSC_PATH_MIDI_STOP       "/stop"
+#define OSC_PATH_MIDI_CONTINUE   "/continue"
+#define OSC_PATH_MIDI_SONGPOS    "/songpos"
+#define OSC_PATH_MIDI_MTC_QF     "/mtc_qf"
+#define OSC_PATH_MIDI_MTC_FF     "/mtc"
 #define OSC_PATH_PING               "/ping"
 #define OSC_PATH_PONG               "/pong"
-#define OSC_PATH_MSG                "/asynth/msg"
-#define OSC_PATH_CUE                "/asynth/cue"
+#define OSC_PATH_MSG                "/msg"
+#define OSC_PATH_CUE                "/cue"
+#define OSC_PATH_IDLE               "/idle"
+#define OSC_PATH_AOUT               "/aout"
 
 enum app_mode {
 	APP_MODE_NORMAL = 0,
@@ -212,6 +225,13 @@ static bool net_settings_ready;
 static bool trigger_1_prev_state;
 static bool trigger_2_prev_state;
 static uint16_t midi_note_thru = 0U;
+static bool idle_next_active;
+static bool idle_next_led_on;
+static uint32_t idle_next_led_toggle_ms;
+static const struct device *const aout_dac_dev = DEVICE_DT_GET(DT_NODELABEL(dac1));
+static bool aout_ready;
+static uint16_t aout_last_raw_value;
+static bool aout_warned_not_ready;
 
 static enum app_mode current_mode = APP_MODE_NORMAL;
 static uint8_t current_menu_item = MENU_ITEM_SAMPLE_PERIOD;
@@ -219,6 +239,147 @@ static uint32_t rot_press_start_ms;
 static bool rot_press_tracking;
 static bool rot_button_was_pressed_last_poll;
 static int8_t rot_encoder_step_accum;
+
+static void cue_pending_cancel(bool show_status);
+
+static void app_idle_set(bool enabled)
+{
+	idle_next_active = enabled;
+}
+
+static void app_idle_clear_on_press(void)
+{
+	idle_next_active = false;
+}
+
+static bool app_osc_parse_optional_bool(const char *format, tosc_message *msg, bool *value)
+{
+	if (value == NULL) {
+		return false;
+	}
+
+	if ((format == NULL) || (format[0] == '\0')) {
+		*value = true;
+		return true;
+	}
+
+	if (format[1] != '\0') {
+		return false;
+	}
+
+	if (format[0] == 'T') {
+		*value = true;
+		return true;
+	}
+
+	if (format[0] == 'F') {
+		*value = false;
+		return true;
+	}
+
+	if (format[0] == 'i') {
+		*value = (tosc_getNextInt32(msg) != 0);
+		return true;
+	}
+
+	return false;
+}
+
+static int app_aout_init(void)
+{
+	struct dac_channel_cfg dac_cfg = {0};
+	int ret;
+
+	dac_cfg.channel_id = AOUT_DAC_CHANNEL_ID;
+	dac_cfg.resolution = AOUT_DAC_RESOLUTION;
+	dac_cfg.buffered = true;
+	dac_cfg.internal = false;
+
+	aout_ready = false;
+	aout_last_raw_value = 0U;
+	aout_warned_not_ready = false;
+
+	if (!device_is_ready(aout_dac_dev)) {
+		printk("AOUT: dac1 device not ready\n");
+		return -ENODEV;
+	}
+
+	ret = dac_channel_setup(aout_dac_dev, &dac_cfg);
+	if (ret < 0) {
+		printk("AOUT: dac_channel_setup failed (%d)\n", ret);
+		return ret;
+	}
+
+	ret = dac_write_value(aout_dac_dev, AOUT_DAC_CHANNEL_ID, 0U);
+	if (ret < 0) {
+		printk("AOUT: initial dac_write_value failed (%d)\n", ret);
+		return ret;
+	}
+
+	aout_ready = true;
+	return 0;
+}
+
+static int app_aout_set_normalized(float normalized)
+{
+	uint16_t raw;
+	int ret = 0;
+
+	if (normalized < 0.0f) {
+		normalized = 0.0f;
+	} else if (normalized > 1.0f) {
+		normalized = 1.0f;
+	}
+
+	raw = (uint16_t)(normalized * (float)AOUT_DAC_MAX_VALUE + 0.5f);
+
+	if (!aout_ready) {
+		if (!aout_warned_not_ready) {
+			printk("AOUT: command received but DAC not ready\n");
+			aout_warned_not_ready = true;
+		}
+		asynth_display_set_a(raw > 0U);
+		return -ENODEV;
+	}
+
+	if (raw != aout_last_raw_value) {
+		ret = dac_write_value(aout_dac_dev, AOUT_DAC_CHANNEL_ID, raw);
+		if (ret < 0) {
+			printk("AOUT: dac_write_value raw=%u failed (%d)\n",
+			       (unsigned int)raw, ret);
+			return ret;
+		}
+		printk("AOUT: norm=%d.%03u raw=%u\n",
+		       (int)normalized,
+		       (unsigned int)((normalized - (float)((int)normalized)) * 1000.0f),
+		       (unsigned int)raw);
+		aout_last_raw_value = raw;
+	}
+
+	asynth_display_set_a(raw > 0U);
+	return 0;
+}
+
+static bool app_idle_tick(uint32_t now_ms)
+{
+	/* Fast path: keep main loop overhead negligible when idle feature is inactive. */
+	if (!idle_next_active) {
+		if (idle_next_led_on) {
+			idle_next_led_on = false;
+			(void)gpio_pin_set_dt(&right_led, 0);
+		}
+		idle_next_led_toggle_ms = now_ms;
+		return false;
+	}
+
+	if ((uint32_t)(now_ms - idle_next_led_toggle_ms) >= IDLE_LED_TOGGLE_INTERVAL_MS) {
+		idle_next_led_toggle_ms = now_ms;
+		idle_next_led_on = !idle_next_led_on;
+		(void)gpio_pin_set_dt(&right_led, idle_next_led_on ? 1 : 0);
+	}
+
+	return false;
+}
 
 volatile uint32_t app_boot_stage;
 volatile int32_t app_boot_error_code;
@@ -258,6 +419,12 @@ static int app_osc_sock_fd = -1;
 static struct sockaddr_in app_osc_remote_addr;
 static bool app_osc_remote_addr_ready;
 static bool app_osc_sock_bound;
+static volatile bool app_net_indicator_state;
+static volatile bool app_net_indicator_pending;
+static volatile bool app_net_activity_pending;
+static bool app_net_last_link_up;
+static uint32_t app_net_next_poll_ms;
+static uint32_t app_net_next_activity_blink_ms;
 
 static bool app_network_ready_for_tx(void)
 {
@@ -280,6 +447,72 @@ static bool app_network_ready_for_tx(void)
 	}
 
 	return net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED) != NULL;
+}
+
+static bool app_network_link_up(struct net_if *iface)
+{
+	if (!iface) {
+		iface = net_if_get_default();
+	}
+
+	if (!iface) {
+		return false;
+	}
+
+	if (!net_if_is_up(iface)) {
+		return false;
+	}
+
+	return net_if_is_carrier_ok(iface);
+}
+
+static void app_network_indicator_update(struct net_if *iface)
+{
+	app_net_indicator_state = app_network_link_up(iface);
+	app_net_indicator_pending = true;
+}
+
+static void app_network_activity_mark(void)
+{
+	app_net_activity_pending = true;
+}
+
+static bool app_network_activity_service(uint32_t now_ms)
+{
+	if (!app_net_activity_pending) {
+		return false;
+	}
+
+	if ((int32_t)(now_ms - app_net_next_activity_blink_ms) < 0) {
+		return false;
+	}
+
+	app_net_activity_pending = false;
+	asynth_display_act_n();
+	app_net_next_activity_blink_ms = now_ms + NET_ACTIVITY_BLINK_MIN_INTERVAL_MS;
+
+	return true;
+}
+
+static int app_osc_send_packet(const char *packet,
+				       size_t packet_len,
+				       const struct sockaddr *target_addr,
+				       socklen_t target_len)
+{
+	int ret;
+
+	ret = zsock_sendto(app_osc_sock_fd,
+			 packet,
+			 packet_len,
+			 0,
+			 target_addr,
+			 target_len);
+	if (ret < 0) {
+		return -errno;
+	}
+
+	app_network_activity_mark();
+	return 0;
 }
 
 static uint16_t app_osc_target_port(void)
@@ -392,17 +625,10 @@ static int app_osc_send_pong(const struct sockaddr_in *remote_addr, socklen_t re
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (const struct sockaddr *)target_addr,
-				 target_len);
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (const struct sockaddr *)target_addr,
+				   target_len);
 }
 
 static bool app_osc_handle_rx_message(tosc_message *msg,
@@ -412,6 +638,9 @@ static bool app_osc_handle_rx_message(tosc_message *msg,
 	const char *address = tosc_getAddress(msg);
 	const char *format = tosc_getFormat(msg);
 	const char *text;
+	int32_t cue_value;
+	bool idle_enabled;
+	float aout_value;
 	int ret;
 
 	if (address == NULL) {
@@ -426,7 +655,73 @@ static bool app_osc_handle_rx_message(tosc_message *msg,
 		return false;
 	}
 
+	if (strcmp(address, OSC_PATH_IDLE) == 0) {
+		if (!app_osc_parse_optional_bool(format, msg, &idle_enabled)) {
+			printk("OSC RX: %s expects no arg, bool, or int(0/1)\n", address);
+			return false;
+		}
+
+		app_idle_set(idle_enabled);
+		return true;
+	}
+
+	if (strcmp(address, OSC_PATH_AOUT) == 0) {
+		if ((format == NULL) || (format[1] != '\0')) {
+			printk("OSC RX: /aout expects one normalized number\n");
+			return false;
+		}
+
+		if (format[0] == 'f') {
+			aout_value = tosc_getNextFloat(msg);
+		} else if (format[0] == 'd') {
+			aout_value = (float)tosc_getNextDouble(msg);
+		} else if (format[0] == 'i') {
+			aout_value = (float)tosc_getNextInt32(msg);
+		} else {
+			printk("OSC RX: /aout expects f, d, or i\n");
+			return false;
+		}
+
+		ret = app_aout_set_normalized(aout_value);
+		if (ret < 0) {
+			printk("AOUT: write failed (%d)\n", ret);
+		}
+
+		return true;
+	}
+
 	if (strcmp(address, OSC_PATH_MSG) != 0) {
+		if (strcmp(address, OSC_PATH_CUE) == 0) {
+			if ((format == NULL) || (format[0] != 'i')) {
+				printk("OSC RX: /cue expects OSC int32\n");
+				return false;
+			}
+
+			cue_value = tosc_getNextInt32(msg);
+			if (cue_value < 0) {
+				cue_value = 0;
+			}
+
+			if (cue_value > 999) {
+				cue_value = 999;
+			}
+
+			cue_pending_cancel(false);
+			current_cue_value = (uint16_t)cue_value;
+			asynth_display_print_cue(current_cue_value);
+
+			if (net_settings_ready) {
+				ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE,
+						      &current_cue_value,
+						      sizeof(current_cue_value));
+				if (ret < 0) {
+					printk("CUE: save failed (%d)\n", ret);
+				}
+			}
+
+			return true;
+		}
+
 		printk("OSC RX: unhandled path '%s'\n", address);
 		return false;
 	}
@@ -463,6 +758,8 @@ static bool app_osc_process_packet(char *packet,
 	if ((packet == NULL) || (len <= 0)) {
 		return false;
 	}
+
+	app_network_activity_mark();
 
 	if (tosc_isBundle(packet)) {
 		tosc_parseBundle(&bundle, packet, len);
@@ -571,33 +868,39 @@ static void app_net_event_handler(struct net_mgmt_event_callback *cb,
 
 	if (mgmt_event == NET_EVENT_IF_UP) {
 		printk("NET: interface up\n");
+		app_network_indicator_update(iface);
 		return;
 	}
 
 	if (mgmt_event == NET_EVENT_IF_DOWN) {
 		printk("NET: interface down\n");
+		app_network_indicator_update(iface);
 		return;
 	}
 
 	if (mgmt_event == NET_EVENT_L4_CONNECTED) {
 		printk("NET: L4 connected\n");
+		app_network_indicator_update(iface);
 		app_print_ipv4_status(iface);
 		return;
 	}
 
 	if (mgmt_event == NET_EVENT_L4_DISCONNECTED) {
 		printk("NET: L4 disconnected\n");
+		app_network_indicator_update(iface);
 		return;
 	}
 
 	if (mgmt_event == NET_EVENT_IPV4_ADDR_ADD) {
 		printk("NET: IPv4 address added\n");
+		app_network_indicator_update(iface);
 		app_print_ipv4_status(iface);
 		return;
 	}
 
 	if (mgmt_event == NET_EVENT_IPV4_ADDR_DEL) {
 		printk("NET: IPv4 address removed\n");
+		app_network_indicator_update(iface);
 		return;
 	}
 }
@@ -618,6 +921,10 @@ static int app_network_init(void)
 				     app_net_event_handler,
 				     APP_NET_EVENT_MASK);
 	net_mgmt_add_event_callback(&app_net_mgmt_cb);
+	app_net_last_link_up = app_network_link_up(iface);
+	app_net_next_poll_ms = k_uptime_get_32();
+	app_net_indicator_state = app_net_last_link_up;
+	app_net_indicator_pending = true;
 
 	if (IS_ENABLED(CONFIG_NET_CONNECTION_MANAGER)) {
 		conn_mgr_mon_resend_status();
@@ -683,17 +990,10 @@ static int app_osc_transport_send_cv(uint8_t cv_index, float normalized)
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
@@ -702,7 +1002,6 @@ static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
 	char packet[128];
 	int len;
 	int ret;
-	int32_t value;
 
 	if (trigger_index > 1U) {
 		return -EINVAL;
@@ -717,24 +1016,16 @@ static int app_osc_transport_send_trigger(uint8_t trigger_index, bool active)
 		return ret;
 	}
 
-	value = active ? 1 : 0;
 	snprintk(path, sizeof(path), trigger_index == 0 ? OSC_PATH_TRIGGER1 : OSC_PATH_TRIGGER2);
-	len = tosc_writeMessage(packet, sizeof(packet), path, "i", value);
+	len = tosc_writeMessage(packet, sizeof(packet), path, active ? "T" : "F");
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_cue(uint16_t cue_value)
@@ -757,22 +1048,14 @@ static int app_osc_send_cue(uint16_t cue_value)
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_midi_note_on(uint8_t channel, uint8_t pitch, uint8_t velocity)
 {
-	char path[32];
 	char packet[128];
 	int len;
 	int ret;
@@ -786,35 +1069,27 @@ static int app_osc_send_midi_note_on(uint8_t channel, uint8_t pitch, uint8_t vel
 		return ret;
 	}
 
-	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
-	 * Path encodes channel and pitch: noteON/{channel}/{pitch}, arg: velocity. */
-	snprintk(path, sizeof(path), "%s/%u/%u",
-		 OSC_PATH_MIDI_NOTE_ON, (unsigned int)(channel + 1U), (unsigned int)pitch);
+	/* Spec §5.1: /note <int channel> <int pitch> <int velocity>
+	 * Channel exported as 1-16, pitch 0-127, velocity 1-127. */
 	len = tosc_writeMessage(packet,
 				 sizeof(packet),
-				 path,
-				 "i",
+				 OSC_PATH_MIDI_NOTE,
+				 "iii",
+				 (int32_t)(channel + 1U),
+				 (int32_t)pitch,
 				 (int32_t)velocity);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_midi_note_off(uint8_t channel, uint8_t pitch)
 {
-	char path[32];
 	char packet[128];
 	int len;
 	int ret;
@@ -828,35 +1103,27 @@ static int app_osc_send_midi_note_off(uint8_t channel, uint8_t pitch)
 		return ret;
 	}
 
-	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
-	 * Path encodes channel: noteOFF/{channel}, arg: pitch. */
-	snprintk(path, sizeof(path), "%s/%u",
-		 OSC_PATH_MIDI_NOTE_OFF, (unsigned int)(channel + 1U));
+	/* Spec §5.2A: preferred note-off = velocity-zero /note message.
+	 * /note <int channel> <int pitch> <int velocity=0> */
 	len = tosc_writeMessage(packet,
 				 sizeof(packet),
-				 path,
-				 "i",
-				 (int32_t)pitch);
+				 OSC_PATH_MIDI_NOTE,
+				 "iii",
+				 (int32_t)(channel + 1U),
+				 (int32_t)pitch,
+				 (int32_t)0);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_midi_pc(uint8_t channel, uint8_t program)
 {
-	char path[32];
 	char packet[128];
 	int len;
 	int ret;
@@ -870,35 +1137,23 @@ static int app_osc_send_midi_pc(uint8_t channel, uint8_t program)
 		return ret;
 	}
 
-	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
-	 * Path encodes channel: PC/{channel}, arg: program. */
-	snprintk(path, sizeof(path), "%s/%u",
-		 OSC_PATH_MIDI_PC, (unsigned int)(channel + 1U));
-	len = tosc_writeMessage(packet,
-				 sizeof(packet),
-				 path,
-				 "i",
-				 (int32_t)program);
+	/* Spec §7: /program <int channel> <int program>
+	 * Channel exported as 1-16, program 0-127 (no +1 offset). */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_PC, "ii",
+				(int32_t)(channel + 1U), (int32_t)program);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 {
-	char path[32];
 	char packet[128];
 	int len;
 	int ret;
@@ -912,36 +1167,23 @@ static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 		return ret;
 	}
 
-	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
-	 * Path encodes channel and CC number for per-controller routing:
-	 * CC/{channel}/{number}, arg: value. */
-	snprintk(path, sizeof(path), "%s/%u/%u",
-		 OSC_PATH_MIDI_CC, (unsigned int)(channel + 1U), (unsigned int)number);
-	len = tosc_writeMessage(packet,
-				 sizeof(packet),
-				 path,
-				 "i",
-				 (int32_t)value);
+	/* Spec §6: /control <int channel> <int controller> <int value>
+	 * Channel exported as 1-16, controller 0-127, value 0-127. */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_CC, "iii",
+				(int32_t)(channel + 1U), (int32_t)number, (int32_t)value);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd,
-				 packet,
-				 (size_t)len,
-				 0,
-				 (struct sockaddr *)&app_osc_remote_addr,
-				 sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
-static int app_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+static int app_osc_send_midi_pitch_bend(uint8_t channel, uint16_t value)
 {
-	char path[32];
 	char packet[128];
 	int len;
 	int ret;
@@ -955,29 +1197,24 @@ static int app_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
 		return ret;
 	}
 
-	/* MIDI channels are 0-15 internally, but exported as 1-16 over OSC.
-	 * Path encodes channel: pitchBend/{channel}, arg: value (-8192..+8191). */
-	snprintk(path, sizeof(path), "%s/%u",
-		 OSC_PATH_MIDI_PITCH_BEND, (unsigned int)(channel + 1U));
-	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)value);
+	/* Spec §8: /pitch <int channel> <int value>
+	 * Channel exported as 1-16, value 0-16383, 8192=center. */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_PITCH_BEND, "ii",
+				(int32_t)(channel + 1U), (int32_t)value);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
-			   (struct sockaddr *)&app_osc_remote_addr,
-			   sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
-static int app_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+static int app_osc_send_no_arg(const char *path)
 {
-	char path[32];
-	char packet[128];
+	char packet[64];
 	int len;
 	int ret;
 
@@ -990,27 +1227,72 @@ static int app_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
 		return ret;
 	}
 
-	/* Path encodes device ID: MMC/{devID}, arg: MMC command code. */
-	snprintk(path, sizeof(path), "%s/%u", OSC_PATH_MIDI_MMC, (unsigned int)dev_id);
-	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)command);
+	len = tosc_writeMessage(packet, sizeof(packet), path, "");
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
-			   (struct sockaddr *)&app_osc_remote_addr,
-			   sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
+}
+
+static int app_osc_send_midi_clock(void)
+{
+	/* Spec §11.1: /clock — no arguments, sent 24 times per quarter note. */
+	return app_osc_send_no_arg(OSC_PATH_MIDI_CLOCK);
+}
+
+static int app_osc_send_midi_start(void)
+{
+	/* Spec §11.2: /start — no arguments. */
+	return app_osc_send_no_arg(OSC_PATH_MIDI_START);
+}
+
+static int app_osc_send_midi_stop(void)
+{
+	/* Spec §11.2: /stop — no arguments. */
+	return app_osc_send_no_arg(OSC_PATH_MIDI_STOP);
+}
+
+static int app_osc_send_midi_continue(void)
+{
+	/* Spec §11.2: /continue — no arguments. */
+	return app_osc_send_no_arg(OSC_PATH_MIDI_CONTINUE);
+}
+
+static int app_osc_send_midi_songpos(uint16_t pos)
+{
+	char packet[64];
+	int len;
+	int ret;
+
+	if (!app_network_ready_for_tx()) {
+		return 0;
 	}
 
-	return 0;
+	ret = app_osc_ensure_socket_and_target();
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Spec §11.3: /songpos <int value> — value in MIDI beats × 6 ticks. */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_SONGPOS, "i", (int32_t)pos);
+	if (len < 0) {
+		return -EINVAL;
+	}
+
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static int app_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
 {
-	char path[32];
-	char packet[128];
+	char packet[64];
 	int len;
 	int ret;
 
@@ -1023,24 +1305,22 @@ static int app_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
 		return ret;
 	}
 
-	/* Path encodes piece index (0-7): MTC/QF/{piece}, arg: value nibble (0-15). */
-	snprintk(path, sizeof(path), "%s/%u", OSC_PATH_MIDI_MTC_QF, (unsigned int)piece);
-	len = tosc_writeMessage(packet, sizeof(packet), path, "i", (int32_t)value);
+	/* /mtc_qf <int piece> <int value> — piece 0-7, value nibble 0-15. */
+	len = tosc_writeMessage(packet, sizeof(packet),
+				OSC_PATH_MIDI_MTC_QF, "ii",
+				(int32_t)piece, (int32_t)value);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
-			   (struct sockaddr *)&app_osc_remote_addr,
-			   sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
-static int app_osc_send_midi_mtc_ff(uint32_t packed)
+static int app_osc_send_midi_mtc_ff(uint8_t hour, uint8_t minute, uint8_t second,
+				    uint8_t frame, uint8_t fps)
 {
 	char packet[128];
 	int len;
@@ -1055,22 +1335,19 @@ static int app_osc_send_midi_mtc_ff(uint32_t packed)
 		return ret;
 	}
 
-	/* MTC Full Frame: packed = (hr << 24) | (mn << 16) | (se << 8) | fr.
-	 * hr byte encodes frame rate (bits 6-5) and hours (bits 4-0). */
+	/* Spec §12.1: /mtc <int hour> <int minute> <int second> <int frame> <int fps> */
 	len = tosc_writeMessage(packet, sizeof(packet),
-				OSC_PATH_MIDI_MTC_FF, "i", (int32_t)packed);
+				OSC_PATH_MIDI_MTC_FF, "iiiii",
+				(int32_t)hour, (int32_t)minute,
+				(int32_t)second, (int32_t)frame, (int32_t)fps);
 	if (len < 0) {
 		return -EINVAL;
 	}
 
-	ret = zsock_sendto(app_osc_sock_fd, packet, (size_t)len, 0,
-			   (struct sockaddr *)&app_osc_remote_addr,
-			   sizeof(app_osc_remote_addr));
-	if (ret < 0) {
-		return -errno;
-	}
-
-	return 0;
+	return app_osc_send_packet(packet,
+				   (size_t)len,
+				   (struct sockaddr *)&app_osc_remote_addr,
+				   sizeof(app_osc_remote_addr));
 }
 
 static void app_osc_transport_configure(void)
@@ -1083,7 +1360,11 @@ static void app_osc_transport_configure(void)
 		.send_midi_pc = app_osc_send_midi_pc,
 		.send_midi_cc = app_osc_send_midi_cc,
 		.send_midi_pitch_bend = app_osc_send_midi_pitch_bend,
-		.send_midi_mmc = app_osc_send_midi_mmc,
+		.send_midi_clock = app_osc_send_midi_clock,
+		.send_midi_start = app_osc_send_midi_start,
+		.send_midi_stop = app_osc_send_midi_stop,
+		.send_midi_continue = app_osc_send_midi_continue,
+		.send_midi_songpos = app_osc_send_midi_songpos,
 		.send_midi_mtc_qf = app_osc_send_midi_mtc_qf,
 		.send_midi_mtc_ff = app_osc_send_midi_mtc_ff,
 	};
@@ -1143,17 +1424,36 @@ static int app_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 	return -ENOTSUP;
 }
 
-static int app_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+static int app_osc_send_midi_pitch_bend(uint8_t channel, uint16_t value)
 {
 	ARG_UNUSED(channel);
 	ARG_UNUSED(value);
 	return -ENOTSUP;
 }
 
-static int app_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+static int app_osc_send_midi_clock(void)
 {
-	ARG_UNUSED(dev_id);
-	ARG_UNUSED(command);
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_start(void)
+{
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_stop(void)
+{
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_continue(void)
+{
+	return -ENOTSUP;
+}
+
+static int app_osc_send_midi_songpos(uint16_t pos)
+{
+	ARG_UNUSED(pos);
 	return -ENOTSUP;
 }
 
@@ -1164,9 +1464,14 @@ static int app_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
 	return -ENOTSUP;
 }
 
-static int app_osc_send_midi_mtc_ff(uint32_t packed)
+static int app_osc_send_midi_mtc_ff(uint8_t hour, uint8_t minute, uint8_t second,
+				    uint8_t frame, uint8_t fps)
 {
-	ARG_UNUSED(packed);
+	ARG_UNUSED(hour);
+	ARG_UNUSED(minute);
+	ARG_UNUSED(second);
+	ARG_UNUSED(frame);
+	ARG_UNUSED(fps);
 	return -ENOTSUP;
 }
 #endif
@@ -2010,6 +2315,10 @@ static bool process_button_events(void)
 	}
 
 	if (asynth_ui_input_pop_button_event(ASYNTH_UI_BUTTON_RIGHT, &right_pressed_now)) {
+		if (right_pressed_now) {
+			app_idle_clear_on_press();
+		}
+
 		if (!right_pressed_now) {
 			if (current_mode == APP_MODE_MENU) {
 				current_menu_item = (uint8_t)((current_menu_item + 1U) % MENU_ITEM_COUNT);
@@ -2234,6 +2543,13 @@ int main(void)
 		printk("MIDI IN: disabled (%d)\n", ret);
 	}
 
+	ret = app_aout_init();
+	if (ret < 0) {
+		printk("AOUT: disabled (%d)\n", ret);
+	} else {
+		printk("AOUT: ready on DAC1 channel %u\n", (unsigned int)AOUT_DAC_CHANNEL_ID);
+	}
+
 	// Intialize Oled screen
 	oled = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 	if (!device_is_ready(oled)) {
@@ -2310,7 +2626,8 @@ int main(void)
 	// Draw text for MIDI and TRIGGERS monitoring
 	cfb_framebuffer_set_font(oled, 0);
 	cfb_set_kerning(oled, 2);
-	cfb_print(oled, "1MA2", 80, 0);
+	cfb_print(oled, " 1MA2", 68, 0);
+	asynth_display_set_a(false);
 
 	// Init center mode hint and button visual states
 	ui_write_center_mode_hint();
@@ -2365,6 +2682,11 @@ int main(void)
 	app_boot_mark(APP_BOOT_STAGE_OSC_READY);
 
 	next_cv_sample_ms = k_uptime_get();
+	idle_next_active = false;
+	idle_next_led_on = false;
+	idle_next_led_toggle_ms = k_uptime_get_32();
+	app_net_activity_pending = false;
+	app_net_next_activity_blink_ms = k_uptime_get_32();
 	app_boot_mark(APP_BOOT_STAGE_MAIN_LOOP);
 
 	/* 
@@ -2387,6 +2709,29 @@ int main(void)
 			ui_dirty = true;
 		}
 
+#if defined(CONFIG_NETWORKING)
+		if ((int32_t)(now_ms - app_net_next_poll_ms) >= 0) {
+			bool link_up_now = app_network_link_up(NULL);
+
+			app_net_next_poll_ms = now_ms + NET_LINK_POLL_INTERVAL_MS;
+			if (link_up_now != app_net_last_link_up) {
+				app_net_last_link_up = link_up_now;
+				asynth_display_set_n(link_up_now);
+				ui_dirty = true;
+			}
+		}
+
+		if (app_net_indicator_pending) {
+			app_net_indicator_pending = false;
+			asynth_display_set_n(app_net_indicator_state);
+			ui_dirty = true;
+		}
+
+		if (app_network_activity_service(now_ms)) {
+			ui_dirty = true;
+		}
+#endif
+
 		dropped = asynth_midi_take_drop_count();
 		if (dropped != 0U) {
 			printk("MIDI IN: dropped %u bytes (queue full)\n", (unsigned int)dropped);
@@ -2403,6 +2748,10 @@ int main(void)
 		}
 
 		if (cue_pending_tick(now_ms)) {
+			ui_dirty = true;
+		}
+
+		if (app_idle_tick(now_ms)) {
 			ui_dirty = true;
 		}
 

@@ -11,10 +11,11 @@
 
 #define MIDI_CHANNEL_MAX       15U
 #define MIDI_DATA_MAX          127U
-#define MIDI_PITCH_BEND_MIN    (-8192)
-#define MIDI_PITCH_BEND_MAX    (8191)
+#define MIDI_PITCH_BEND_MAX    16383U
+#define MIDI_SONGPOS_MAX       16383U
 #define MIDI_MTC_PIECE_MAX     7U
 #define MIDI_MTC_VALUE_MAX     15U
+#define MIDI_MTC_FPS_MAX       30U
 
 static bool transport_enabled;
 static struct asynth_osc_transport_ops transport_ops;
@@ -81,7 +82,11 @@ void asynth_osc_set_transport_ops(const struct asynth_osc_transport_ops *ops)
 		transport_ops.send_midi_pc = NULL;
 		transport_ops.send_midi_cc = NULL;
 		transport_ops.send_midi_pitch_bend = NULL;
-		transport_ops.send_midi_mmc = NULL;
+		transport_ops.send_midi_clock = NULL;
+		transport_ops.send_midi_start = NULL;
+		transport_ops.send_midi_stop = NULL;
+		transport_ops.send_midi_continue = NULL;
+		transport_ops.send_midi_songpos = NULL;
 		transport_ops.send_midi_mtc_qf = NULL;
 		transport_ops.send_midi_mtc_ff = NULL;
 		return;
@@ -94,7 +99,11 @@ void asynth_osc_set_transport_ops(const struct asynth_osc_transport_ops *ops)
 	transport_ops.send_midi_pc = ops->send_midi_pc;
 	transport_ops.send_midi_cc = ops->send_midi_cc;
 	transport_ops.send_midi_pitch_bend = ops->send_midi_pitch_bend;
-	transport_ops.send_midi_mmc = ops->send_midi_mmc;
+	transport_ops.send_midi_clock = ops->send_midi_clock;
+	transport_ops.send_midi_start = ops->send_midi_start;
+	transport_ops.send_midi_stop = ops->send_midi_stop;
+	transport_ops.send_midi_continue = ops->send_midi_continue;
+	transport_ops.send_midi_songpos = ops->send_midi_songpos;
 	transport_ops.send_midi_mtc_qf = ops->send_midi_mtc_qf;
 	transport_ops.send_midi_mtc_ff = ops->send_midi_mtc_ff;
 }
@@ -271,7 +280,7 @@ int asynth_osc_send_midi_cc(uint8_t channel, uint8_t number, uint8_t value)
 	return asynth_osc_stub_send();
 }
 
-int asynth_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
+int asynth_osc_send_midi_pitch_bend(uint8_t channel, uint16_t value)
 {
 	int ret;
 
@@ -280,7 +289,7 @@ int asynth_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
 		return ret;
 	}
 
-	if (value < MIDI_PITCH_BEND_MIN || value > MIDI_PITCH_BEND_MAX) {
+	if (value > MIDI_PITCH_BEND_MAX) {
 		return -ERANGE;
 	}
 
@@ -297,18 +306,73 @@ int asynth_osc_send_midi_pitch_bend(uint8_t channel, int16_t value)
 	return asynth_osc_stub_send();
 }
 
-int asynth_osc_send_midi_mmc(uint8_t dev_id, uint8_t command)
+int asynth_osc_send_midi_clock(void)
 {
 	if (transport_enabled) {
-		if (transport_ops.send_midi_mmc == NULL) {
+		if (transport_ops.send_midi_clock == NULL) {
 			return -ENOSYS;
 		}
 
-		return transport_ops.send_midi_mmc(dev_id, command);
+		return transport_ops.send_midi_clock();
 	}
 
-	ARG_UNUSED(dev_id);
-	ARG_UNUSED(command);
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_start(void)
+{
+	if (transport_enabled) {
+		if (transport_ops.send_midi_start == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_start();
+	}
+
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_stop(void)
+{
+	if (transport_enabled) {
+		if (transport_ops.send_midi_stop == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_stop();
+	}
+
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_continue(void)
+{
+	if (transport_enabled) {
+		if (transport_ops.send_midi_continue == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_continue();
+	}
+
+	return asynth_osc_stub_send();
+}
+
+int asynth_osc_send_midi_songpos(uint16_t pos)
+{
+	if (pos > MIDI_SONGPOS_MAX) {
+		return -ERANGE;
+	}
+
+	if (transport_enabled) {
+		if (transport_ops.send_midi_songpos == NULL) {
+			return -ENOSYS;
+		}
+
+		return transport_ops.send_midi_songpos(pos);
+	}
+
+	ARG_UNUSED(pos);
 	return asynth_osc_stub_send();
 }
 
@@ -335,16 +399,25 @@ int asynth_osc_send_midi_mtc_qf(uint8_t piece, uint8_t value)
 	return asynth_osc_stub_send();
 }
 
-int asynth_osc_send_midi_mtc_ff(uint32_t packed)
+int asynth_osc_send_midi_mtc_ff(uint8_t hour, uint8_t minute, uint8_t second,
+				uint8_t frame, uint8_t fps)
 {
+	if (fps > MIDI_MTC_FPS_MAX) {
+		return -ERANGE;
+	}
+
 	if (transport_enabled) {
 		if (transport_ops.send_midi_mtc_ff == NULL) {
 			return -ENOSYS;
 		}
 
-		return transport_ops.send_midi_mtc_ff(packed);
+		return transport_ops.send_midi_mtc_ff(hour, minute, second, frame, fps);
 	}
 
-	ARG_UNUSED(packed);
+	ARG_UNUSED(hour);
+	ARG_UNUSED(minute);
+	ARG_UNUSED(second);
+	ARG_UNUSED(frame);
+	ARG_UNUSED(fps);
 	return asynth_osc_stub_send();
 }

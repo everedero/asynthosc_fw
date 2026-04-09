@@ -123,11 +123,15 @@ Expected outputs:
 	- Add `#include <stdint.h>` in `include/app/lib/tinyosc.h`.
 	- Enable networking options in `app/prj.conf`.
 	- Replace OSC send stubs in `app/src/main.c` with live transport calls.
-- Requested default network values:
-	- Local IP: `192.168.1.42`
-	- Target IP: `192.168.1.142`
-	- Oport (TX): `12100`
-	- Iport (RX): `9100`
+- Current code default network values (`app/src/main.c`):
+	- IP mode: `Static` (`ip_mode = 0`)
+	- Base subnet bytes: `192.168.1` (`ip_b1=192`, `ip_b2=168`, `ip_b3=1`)
+	- Local IP (device): `192.168.1.42` (`device_ip4 = 42`)
+	- Target IP: `192.168.1.142` (`target_ip4 = 142`)
+	- CIDR mask: `/24` (`cidr_mask = 24`)
+	- Port base: `42000`
+	- TX target port: `42010` (`target_port = 10`, effective = `42000 + 10`)
+	- RX device port: `42011` (`device_port = 11`, effective = `42000 + 11`)
 
 ## Notes
 

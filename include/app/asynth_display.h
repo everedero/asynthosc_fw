@@ -23,6 +23,9 @@ void asynth_display_act_t1(void);
 void asynth_display_act_t2(void);
 void asynth_display_act_m(void);
 void asynth_display_act_a(void);
+void asynth_display_act_n(void);
+void asynth_display_set_a(bool on);
+void asynth_display_set_n(bool on);
 
 bool asynth_display_tick_status_message_scroll(void);
 bool asynth_display_tick_activity(uint32_t now_ms);
