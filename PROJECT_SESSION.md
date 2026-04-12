@@ -11,20 +11,25 @@ This file is a single entry point to start a new development session from this p
 
 ## Canonical Paths
 
-- Workspace root: `C:\Users\Mathieu\asynthosc\my-workspace`
-- Firmware repo root: `C:\Users\Mathieu\asynthosc\my-workspace\asynthosc_fw`
-- Active Zephyr source tree (single): `C:\Users\Mathieu\asynthosc\my-workspace\zephyr`
-- Canonical build directory: `C:\Users\Mathieu\asynthosc\my-workspace\build`
+- Workspace root: `<workspace-root>`
+- Firmware repo root: `<workspace-root>/asynthosc_fw`
+- Active Zephyr source tree (single): `<workspace-root>/zephyr`
+- Canonical build directory: `<workspace-root>/build`
 - `asynthosc_fw/zephyr/module.yml` is module metadata, not a second Zephyr tree.
 
 ## Session Quick Start (Windows PowerShell)
 
 ```powershell
-cd C:\Users\Mathieu\asynthosc\my-workspace
+cd <workspace-root>
 & ".\.venv\Scripts\Activate.ps1"
 west build -p always -b asynthosc asynthosc_fw/app
 west flash --skip-rebuild --build-dir build --runner blackmagicprobe -- --gdb-serial COM3
 ```
+
+## Private Local Notes
+
+- Put personal setup/build notes in `local_docs/` or `PROJECT_SESSION.local.md`.
+- These paths are ignored by Git and will not be pushed to public repositories.
 
 Alternative flash runner:
 

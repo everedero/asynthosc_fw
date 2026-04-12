@@ -19,3 +19,7 @@ __pycache__/
 
 # docs
 /doc/_build*
+
+# private local notes (never committed)
+/local_docs/
+/PROJECT_SESSION.local.md
