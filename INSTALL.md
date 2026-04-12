@@ -122,5 +122,5 @@ west sdk install
 Go to the project folder:
 ```
 cd my-project
-python -m west build -p always -b asynthosc asynthosc_fw/samples/adc_sequence/
+west build -p always -b asynthosc asynthosc_fw/samples/adc_sequence/
 ```

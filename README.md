@@ -13,11 +13,6 @@ The [manifest](west.yml) is used the select the compatible Zephyr version.
 Note: do not "git clone" this project, see installation instructions to run
 "west init" in order to initialize the project.
 
-## Session guide
-
-For a single-entry startup document with quick commands and a full documentation
-index, see [PROJECT_SESSION.md](PROJECT_SESSION.md).
-
 ## Probe connection
 
 ### Connect ST-Link
@@ -260,8 +255,8 @@ Please refer to the [project installation guide](INSTALL.md).
 The main application can be built with:
 
 ```shell
-cd C:\Users\Mathieu\asynthosc\my-workspace
-python -m west build -p always -b asynthosc asynthosc_fw/app
+
+west build -p always -b asynthosc asynthosc_fw/app
 ```
 "-p always" tells the build to clean before build and "-b asynthosc" instructs to build for the
 Asynthosc PCB. Building from workspace root keeps all generated files in `my-workspace/build`.
@@ -271,7 +266,6 @@ Only one Zephyr source tree is active for this project: `my-workspace/zephyr`.
 
 Then to flash it on the board:
 ```shell
-cd C:\Users\Mathieu\asynthosc\my-workspace
 python -m west flash --skip-rebuild --build-dir build --runner blackmagicprobe -- --gdb-serial COM3
 ```
 
@@ -324,7 +318,6 @@ If it’s missing modules, maybe you forgot to activate the right virtual env?
 Windows PowerShell (canonical workspace):
 
 ```powershell
-cd C:\Users\Mathieu\asynthosc\my-workspace
 & ".\.venv\Scripts\Activate.ps1"
 ```
 
@@ -363,9 +356,9 @@ Don’t forget to add more tests in tests/lib/tinyosc/src/main.c!
 
 It means we don’t need an FTDI
 
-    cd C:\Users\Mathieu\asynthosc\my-workspace\zephyr\samples\subsys\shell
+    cd ~/zephyrproject/zephyr/samples/subsys/shell
 
-    C:\Users\Mathieu\asynthosc\my-workspace\.venv\Scripts\python.exe -m west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
+    west build -p always -b asynthosc ./shell_module -DOVERLAY_CONFIG=overlay-usb.conf -DDTC_OVERLAY_FILE=usb.overlay
 
 ### Timestamp retrieve
 To be implemented.
