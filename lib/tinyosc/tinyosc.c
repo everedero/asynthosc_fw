@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /**
  * Copyright (c) 2015-2018, Martin Roth (mhroth@gmail.com)
  *

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) 2026 ASynthOSC contributors */
+
 /*
  * Asynth2OSC module main code
  */

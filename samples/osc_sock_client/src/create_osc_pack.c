@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) 2026 ASynthOSC contributors */
+
 #include <app/lib/tinyosc.h>
 #include <zephyr/kernel.h>
 
