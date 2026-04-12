@@ -7,3 +7,9 @@
 
 rsource "drivers/Kconfig"
 rsource "lib/Kconfig"
+
+config ASYNTH_TIMING_DIAG
+	bool "ASynth timing diagnostics"
+	help
+	  Enable lightweight runtime timing statistics for normal mode,
+	  including loop duration and CV sampling interval.

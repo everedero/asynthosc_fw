@@ -10,11 +10,12 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <app/asynth_osc_bridge.h>
 #include <app/asynth_display.h>
 
 #define MIDI_IN_NODE DT_NODELABEL(midi)
-#define MIDI_IN_MSGQ_LEN 128U
+#define MIDI_IN_MSGQ_LEN 512U
 #define MIDI_IN_DIAG_LOG_PERIOD_MS 30000U
 
 #if !DT_NODE_HAS_STATUS(MIDI_IN_NODE, okay)
@@ -25,7 +26,7 @@ static const struct device *const midi_in_uart_dev = DEVICE_DT_GET(MIDI_IN_NODE)
 
 K_MSGQ_DEFINE(midi_in_msgq, sizeof(uint8_t), MIDI_IN_MSGQ_LEN, 1);
 
-static volatile uint32_t midi_in_drop_count;
+static atomic_t midi_in_drop_count = ATOMIC_INIT(0);
 static volatile uint32_t midi_in_isr_rx_count;
 static volatile uint32_t midi_in_poll_rx_count;
 static volatile uint32_t midi_in_uart_err_count;
@@ -65,7 +66,7 @@ static void midi_in_uart_cb(const struct device *dev, void *user_data)
 	while (uart_fifo_read(dev, &byte, 1) == 1) {
 		midi_in_isr_rx_count++;
 		if (k_msgq_put(&midi_in_msgq, &byte, K_NO_WAIT) != 0) {
-			midi_in_drop_count++;
+			atomic_inc(&midi_in_drop_count);
 		}
 	}
 }
@@ -117,7 +118,7 @@ void asynth_midi_poll_fallback(void)
 	while (uart_poll_in(midi_in_uart_dev, &byte) == 0) {
 		midi_in_poll_rx_count++;
 		if (k_msgq_put(&midi_in_msgq, &byte, K_NO_WAIT) != 0) {
-			midi_in_drop_count++;
+			atomic_inc(&midi_in_drop_count);
 		}
 	}
 }
@@ -142,7 +143,7 @@ void asynth_midi_log_diag(uint32_t *last_log_ms)
 	uint32_t now_ms = k_uptime_get_32();
 	uint32_t isr_count = midi_in_isr_rx_count;
 	uint32_t poll_count = midi_in_poll_rx_count;
-	uint32_t drop_count = midi_in_drop_count;
+	uint32_t drop_count = (uint32_t)atomic_get(&midi_in_drop_count);
 	uint32_t err_count = midi_in_uart_err_count;
 	int last_err = midi_in_last_uart_err;
 	bool changed;
@@ -389,13 +390,20 @@ static void midi_parse_and_dispatch(uint8_t byte)
 
 bool asynth_midi_process_events(void)
 {
+	return asynth_midi_process_events_budget(UINT16_MAX);
+}
+
+bool asynth_midi_process_events_budget(uint16_t max_bytes)
+{
 	uint8_t byte;
 	bool ui_dirty = false;
+	uint16_t processed = 0U;
 
-	while (k_msgq_get(&midi_in_msgq, &byte, K_NO_WAIT) == 0) {
+	while ((processed < max_bytes) && (k_msgq_get(&midi_in_msgq, &byte, K_NO_WAIT) == 0)) {
 		midi_parse_and_dispatch(byte);
 		asynth_display_act_m();
 		ui_dirty = true;
+		processed++;
 	}
 
 	return ui_dirty;
@@ -403,13 +411,7 @@ bool asynth_midi_process_events(void)
 
 uint32_t asynth_midi_take_drop_count(void)
 {
-	uint32_t dropped = midi_in_drop_count;
-
-	if (dropped != 0U) {
-		midi_in_drop_count = 0U;
-	}
-
-	return dropped;
+	return (uint32_t)atomic_set(&midi_in_drop_count, 0);
 }
 
 void asynth_midi_set_note_forward_enabled(bool enabled)

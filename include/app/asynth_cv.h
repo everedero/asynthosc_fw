@@ -14,9 +14,12 @@
 extern "C" {
 #endif
 
+#define ASYNTH_CV_CHANNEL_COUNT 4
+
 int asynth_cv_init(const struct device *display_dev);
 int asynth_cv_sample_and_process(float hysteresis_norm);
 void asynth_cv_refresh_bars(void);
+void asynth_cv_reset_display_cache(void);
 
 #ifdef __cplusplus
 }

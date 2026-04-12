@@ -13,7 +13,6 @@
 #include <zephyr/sys/util.h>
 #include <app/asynth_osc_bridge.h>
 
-#define CV_CHANNEL_COUNT      4
 #define CV_BAR_MAX_PIXELS     28U
 #define CV_ADC_RESOLUTION     12U
 #define CV_ADC_MAX_RAW        ((1U << CV_ADC_RESOLUTION) - 1U)
@@ -28,30 +27,30 @@ BUILD_ASSERT(DT_NODE_HAS_PROP(CV_CONFIG_NODE, cv_channel_ids),
 	     "Missing /zephyr,user cv-channel-ids");
 BUILD_ASSERT(DT_NODE_HAS_PROP(CV_CONFIG_NODE, cv_display_remap),
 	     "Missing /zephyr,user cv-display-remap");
-BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_channel_ids) == CV_CHANNEL_COUNT,
-	     "cv-channel-ids length must match CV_CHANNEL_COUNT");
-BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_display_remap) == CV_CHANNEL_COUNT,
-	     "cv-display-remap length must match CV_CHANNEL_COUNT");
+BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_channel_ids) == ASYNTH_CV_CHANNEL_COUNT,
+	     "cv-channel-ids length must match ASYNTH_CV_CHANNEL_COUNT");
+BUILD_ASSERT(DT_PROP_LEN(CV_CONFIG_NODE, cv_display_remap) == ASYNTH_CV_CHANNEL_COUNT,
+	     "cv-display-remap length must match ASYNTH_CV_CHANNEL_COUNT");
 
 #define CV_CHANNEL_ID_FROM_DTS(idx, _) DT_PROP_BY_IDX(CV_CONFIG_NODE, cv_channel_ids, idx)
 #define CV_DISPLAY_REMAP_FROM_DTS(idx, _) DT_PROP_BY_IDX(CV_CONFIG_NODE, cv_display_remap, idx)
 
-static const uint8_t cv_adc_channel_ids[CV_CHANNEL_COUNT] = {
-	LISTIFY(CV_CHANNEL_COUNT, CV_CHANNEL_ID_FROM_DTS, (,))
+static const uint8_t cv_adc_channel_ids[ASYNTH_CV_CHANNEL_COUNT] = {
+	LISTIFY(ASYNTH_CV_CHANNEL_COUNT, CV_CHANNEL_ID_FROM_DTS, (,))
 };
 
 /* ADC index -> UI and OSC CV index remap. */
-static const uint8_t cv_display_remap[CV_CHANNEL_COUNT] = {
-	LISTIFY(CV_CHANNEL_COUNT, CV_DISPLAY_REMAP_FROM_DTS, (,))
+static const uint8_t cv_display_remap[ASYNTH_CV_CHANNEL_COUNT] = {
+	LISTIFY(ASYNTH_CV_CHANNEL_COUNT, CV_DISPLAY_REMAP_FROM_DTS, (,))
 };
 
 static const struct device *cv_adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc1));
 static const struct device *oled;
 
-static int16_t cv_raw_samples[CV_CHANNEL_COUNT];
-static float cv_norm_values[CV_CHANNEL_COUNT] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static float cv_prev_sent_values[CV_CHANNEL_COUNT] = { -1.0f, -1.0f, -1.0f, -1.0f };
-static uint8_t cv_pixels[CV_CHANNEL_COUNT] = { 0, 0, 0, 0 };
+static int16_t cv_raw_samples[ASYNTH_CV_CHANNEL_COUNT];
+static float cv_norm_values[ASYNTH_CV_CHANNEL_COUNT] = { 0.0f, 0.0f, 0.0f, 0.0f };
+static float cv_prev_sent_values[ASYNTH_CV_CHANNEL_COUNT] = { -1.0f, -1.0f, -1.0f, -1.0f };
+static uint8_t cv_pixels[ASYNTH_CV_CHANNEL_COUNT] = { 0, 0, 0, 0 };
 
 static struct adc_sequence cv_adc_sequence = {
 	.buffer = cv_raw_samples,
@@ -102,8 +101,8 @@ static int cv_validate_remap(const uint8_t *remap, const char *name)
 {
 	uint32_t seen = 0U;
 
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
-		if (remap[i] >= CV_CHANNEL_COUNT) {
+	for (int i = 0; i < ASYNTH_CV_CHANNEL_COUNT; i++) {
+		if (remap[i] >= ASYNTH_CV_CHANNEL_COUNT) {
 			printk("Invalid CV %s remap index %d -> %u\n",
 			       name, i, (unsigned int)remap[i]);
 			return -EINVAL;
@@ -119,6 +118,13 @@ static int cv_validate_remap(const uint8_t *remap, const char *name)
 	}
 
 	return 0;
+}
+
+void asynth_cv_reset_display_cache(void)
+{
+	for (int i = 0; i < ASYNTH_CV_CHANNEL_COUNT; i++) {
+		cv_pixels[i] = 0U;
+	}
 }
 
 int asynth_cv_init(const struct device *display_dev)
@@ -142,7 +148,7 @@ int asynth_cv_init(const struct device *display_dev)
 		return -ENODEV;
 	}
 
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
+	for (int i = 0; i < ASYNTH_CV_CHANNEL_COUNT; i++) {
 		channel_cfg.channel_id = cv_adc_channel_ids[i];
 #if defined(CONFIG_ADC_CONFIGURABLE_INPUTS)
 		channel_cfg.input_positive = cv_adc_channel_ids[i];
@@ -167,7 +173,7 @@ int asynth_cv_sample_and_process(float hysteresis_norm)
 		return ret;
 	}
 
-	for (int i = 0; i < CV_CHANNEL_COUNT; i++) {
+	for (int i = 0; i < ASYNTH_CV_CHANNEL_COUNT; i++) {
 		float voltage = cv_raw_to_voltage(cv_raw_samples[i]);
 		float normalized = cv_voltage_to_normalized(voltage);
 		float delta;
@@ -198,7 +204,7 @@ void asynth_cv_refresh_bars(void)
 		return;
 	}
 
-	for (int adc_idx = 0; adc_idx < CV_CHANNEL_COUNT; adc_idx++) {
+	for (int adc_idx = 0; adc_idx < ASYNTH_CV_CHANNEL_COUNT; adc_idx++) {
 		uint8_t display_pos = cv_display_remap[adc_idx];
 		uint8_t new_pixels = cv_normalized_to_pixels(cv_norm_values[adc_idx]);
 

@@ -13,6 +13,7 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/dac.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 #include <app/asynth_cv.h>
 #include <app/asynth_display.h>
@@ -47,7 +48,6 @@ const struct gpio_dt_spec trigger_1 = GPIO_DT_SPEC_GET(DT_NODELABEL(trigger_1), 
 const struct gpio_dt_spec trigger_2 = GPIO_DT_SPEC_GET(DT_NODELABEL(trigger_2), gpios);
 const struct device *oled;
 
-#define CV_CHANNEL_COUNT      4
 #define AOUT_DAC_CHANNEL_ID   1U
 #define AOUT_DAC_RESOLUTION   12U
 #define AOUT_DAC_MAX_VALUE    ((1U << AOUT_DAC_RESOLUTION) - 1U)
@@ -56,7 +56,7 @@ const struct device *oled;
 #define CV_ADC_MAX_RAW        ((1U << CV_ADC_RESOLUTION) - 1U)
 #define CV_ADC_FULL_SCALE_MV  3300U
 
-#define CV_SAMPLE_PERIOD_MIN_MS           10U
+#define CV_SAMPLE_PERIOD_MIN_MS           5U
 #define CV_SAMPLE_PERIOD_MAX_MS           200U
 #define CV_SAMPLE_PERIOD_STEP_MS          5U
 #define CV_SAMPLE_PERIOD_DEFAULT_MS       20U
@@ -75,6 +75,13 @@ const struct device *oled;
 #define IDLE_LED_TOGGLE_INTERVAL_MS 125U
 #define NET_LINK_POLL_INTERVAL_MS 250U
 #define NET_ACTIVITY_BLINK_MIN_INTERVAL_MS 80U
+#define MIDI_PROCESS_BUDGET_NORMAL 96U
+#define DISPLAY_FLUSH_MIN_INTERVAL_MS 20U
+#define NONCRIT_SERVICE_INTERVAL_MS 10U
+
+#if defined(CONFIG_ASYNTH_TIMING_DIAG)
+#define ASYNTH_TIMING_DIAG_LOG_PERIOD_MS 5000U
+#endif
 
 #define TRIGGER_EVENT_LOG_ENABLE         0U
 #define BUTTON_EVENT_LOG_ENABLE          0U
@@ -195,6 +202,7 @@ struct net_menu_settings {
 
 static int asynth_settings_set(const char *name, size_t len, settings_read_cb read_cb,
 				      void *cb_arg);
+static uint32_t net_cidr_to_mask(uint16_t cidr);
 
 static struct settings_handler asynth_settings_handler = {
 	.name = "asynth",
@@ -202,7 +210,7 @@ static struct settings_handler asynth_settings_handler = {
 };
 
 /* Global CV settings (to be replaced by menu/settings later). */
-static uint32_t cv_sample_period_ms = CV_SAMPLE_PERIOD_DEFAULT_MS;
+static uint16_t cv_sample_period_ms = CV_SAMPLE_PERIOD_DEFAULT_MS;
 static uint16_t cv_hysteresis_permille = CV_HYSTERESIS_DEFAULT_PERMILLE;
 static float cv_hysteresis_norm = 0.01f;
 static uint16_t current_cue_value = 0U;
@@ -227,7 +235,16 @@ static bool net_settings_ready;
 
 static bool trigger_1_prev_state;
 static bool trigger_2_prev_state;
+static volatile bool trigger_1_changed;
+static volatile bool trigger_2_changed;
+static bool trigger_irq_enabled;
+static struct gpio_callback trigger_1_cb_data;
+static struct gpio_callback trigger_2_cb_data;
 static uint16_t midi_note_thru = 0U;
+static bool cue_settings_dirty;
+static bool menu_net_settings_dirty;
+static bool menu_adc_settings_dirty;
+static bool menu_midi_settings_dirty;
 static bool idle_next_active;
 static bool idle_next_led_on;
 static uint32_t idle_next_led_toggle_ms;
@@ -243,7 +260,64 @@ static bool rot_press_tracking;
 static bool rot_button_was_pressed_last_poll;
 static int8_t rot_encoder_step_accum;
 
+K_SEM_DEFINE(cv_sample_sem, 0, 1);
+static struct k_timer cv_sample_timer;
+static atomic_t cv_sample_pending = ATOMIC_INIT(0);
+static atomic_t cv_timer_tick_count = ATOMIC_INIT(0);
+static atomic_t cv_timer_overrun_count = ATOMIC_INIT(0);
+
 static void cue_pending_cancel(bool show_status);
+
+static void app_cv_sample_timer_cb(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+	atomic_inc(&cv_timer_tick_count);
+
+	if (atomic_cas(&cv_sample_pending, 0, 1)) {
+		k_sem_give(&cv_sample_sem);
+	} else {
+		atomic_inc(&cv_timer_overrun_count);
+	}
+}
+
+static void app_cv_sample_timer_restart(void)
+{
+	k_timer_stop(&cv_sample_timer);
+	k_sem_reset(&cv_sample_sem);
+	atomic_clear(&cv_sample_pending);
+	k_timer_start(&cv_sample_timer,
+		      K_MSEC(cv_sample_period_ms),
+		      K_MSEC(cv_sample_period_ms));
+}
+
+static void cue_settings_save_sync(void)
+{
+	int ret;
+
+	if (!net_settings_ready) {
+		return;
+	}
+
+	ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE,
+			       &current_cue_value,
+			       sizeof(current_cue_value));
+	if (ret < 0) {
+		printk("CUE: save failed (%d)\n", ret);
+		return;
+	}
+
+	cue_settings_dirty = false;
+}
+
+static void cue_settings_request_save(void)
+{
+	if (current_mode == APP_MODE_NORMAL) {
+		cue_settings_dirty = true;
+		return;
+	}
+
+	cue_settings_save_sync();
+}
 
 static void app_idle_set(bool enabled)
 {
@@ -253,6 +327,42 @@ static void app_idle_set(bool enabled)
 static void app_idle_clear_on_press(void)
 {
 	idle_next_active = false;
+}
+
+static void trigger_irq_capture(const struct gpio_dt_spec *trigger,
+				      volatile bool *state,
+				      volatile bool *changed)
+{
+	int level = asynth_ui_pin_get_raw_dt(trigger);
+	bool new_state;
+
+	if (level < 0) {
+		return;
+	}
+
+	new_state = asynth_ui_level_is_pressed(trigger, level);
+	if (new_state != *state) {
+		*state = new_state;
+		*changed = true;
+	}
+}
+
+static void trigger_1_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
+{
+	ARG_UNUSED(port);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	trigger_irq_capture(&trigger_1, &trigger_1_prev_state, &trigger_1_changed);
+}
+
+static void trigger_2_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins)
+{
+	ARG_UNUSED(port);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	trigger_irq_capture(&trigger_2, &trigger_2_prev_state, &trigger_2_changed);
 }
 
 static bool app_osc_parse_optional_bool(const char *format, tosc_message *msg, bool *value)
@@ -422,9 +532,9 @@ static int app_osc_sock_fd = -1;
 static struct sockaddr_in app_osc_remote_addr;
 static bool app_osc_remote_addr_ready;
 static bool app_osc_sock_bound;
-static volatile bool app_net_indicator_state;
-static volatile bool app_net_indicator_pending;
-static volatile bool app_net_activity_pending;
+static atomic_t app_net_indicator_state = ATOMIC_INIT(0);
+static atomic_t app_net_indicator_pending = ATOMIC_INIT(0);
+static atomic_t app_net_activity_pending = ATOMIC_INIT(0);
 static bool app_net_last_link_up;
 static uint32_t app_net_next_poll_ms;
 static uint32_t app_net_next_activity_blink_ms;
@@ -471,30 +581,71 @@ static bool app_network_link_up(struct net_if *iface)
 
 static void app_network_indicator_update(struct net_if *iface)
 {
-	app_net_indicator_state = app_network_link_up(iface);
-	app_net_indicator_pending = true;
+	atomic_set(&app_net_indicator_state, app_network_link_up(iface) ? 1 : 0);
+	atomic_set(&app_net_indicator_pending, 1);
 }
 
 static void app_network_activity_mark(void)
 {
-	app_net_activity_pending = true;
+	atomic_set(&app_net_activity_pending, 1);
 }
 
 static bool app_network_activity_service(uint32_t now_ms)
 {
-	if (!app_net_activity_pending) {
-		return false;
-	}
-
 	if ((int32_t)(now_ms - app_net_next_activity_blink_ms) < 0) {
 		return false;
 	}
 
-	app_net_activity_pending = false;
+	if (!atomic_cas(&app_net_activity_pending, 1, 0)) {
+		return false;
+	}
+
 	asynth_display_act_n();
 	app_net_next_activity_blink_ms = now_ms + NET_ACTIVITY_BLINK_MIN_INTERVAL_MS;
 
 	return true;
+}
+
+static int app_network_apply_static_config(struct net_if *iface)
+{
+	struct in_addr addr;
+	struct in_addr netmask;
+	struct net_if *addr_iface;
+	char ip_str[24];
+	uint32_t mask;
+
+	snprintk(ip_str, sizeof(ip_str), "%u.%u.%u.%u",
+		 (unsigned int)net_cfg.ip_b1,
+		 (unsigned int)net_cfg.ip_b2,
+		 (unsigned int)net_cfg.ip_b3,
+		 (unsigned int)net_cfg.device_ip4);
+
+	if (net_addr_pton(AF_INET, ip_str, &addr) < 0) {
+		printk("NETCFG: invalid static IP %s\n", ip_str);
+		return -EINVAL;
+	}
+
+	if (net_if_ipv4_addr_lookup(&addr, &addr_iface) == NULL) {
+		if (net_if_ipv4_addr_add(iface, &addr, NET_ADDR_MANUAL, 0U) == NULL) {
+			printk("NETCFG: failed to add static IPv4 %s\n", ip_str);
+			return -EIO;
+		}
+	}
+
+	mask = net_cidr_to_mask(net_cfg.cidr_mask);
+	netmask.s_addr = htonl(mask);
+	if (!net_if_ipv4_set_netmask_by_addr(iface, &addr, &netmask)) {
+		printk("NETCFG: failed to set netmask /%u for %s\n",
+		       (unsigned int)net_cfg.cidr_mask,
+		       ip_str);
+		return -EIO;
+	}
+
+	printk("NETCFG: applied static IPv4 %s/%u\n",
+	       ip_str,
+	       (unsigned int)net_cfg.cidr_mask);
+
+	return 0;
 }
 
 static int app_osc_send_packet(const char *packet,
@@ -712,15 +863,7 @@ static bool app_osc_handle_rx_message(tosc_message *msg,
 			cue_pending_cancel(false);
 			current_cue_value = (uint16_t)cue_value;
 			asynth_display_print_cue(current_cue_value);
-
-			if (net_settings_ready) {
-				ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE,
-						      &current_cue_value,
-						      sizeof(current_cue_value));
-				if (ret < 0) {
-					printk("CUE: save failed (%d)\n", ret);
-				}
-			}
+			cue_settings_request_save();
 
 			return true;
 		}
@@ -926,8 +1069,8 @@ static int app_network_init(void)
 	net_mgmt_add_event_callback(&app_net_mgmt_cb);
 	app_net_last_link_up = app_network_link_up(iface);
 	app_net_next_poll_ms = k_uptime_get_32();
-	app_net_indicator_state = app_net_last_link_up;
-	app_net_indicator_pending = true;
+	atomic_set(&app_net_indicator_state, app_net_last_link_up ? 1 : 0);
+	atomic_set(&app_net_indicator_pending, 1);
 
 	if (IS_ENABLED(CONFIG_NET_CONNECTION_MANAGER)) {
 		conn_mgr_mon_resend_status();
@@ -947,6 +1090,15 @@ static int app_network_init(void)
 	}
 
 	printk("NET: Ethernet bring-up requested\n");
+	if (net_cfg.ip_mode == 0U) {
+		ret = app_network_apply_static_config(iface);
+		if (ret < 0) {
+			printk("NETCFG: runtime static IP apply failed (%d)\n", ret);
+		}
+	} else {
+		printk("NETCFG: ip_mode=%u keeps Zephyr network auto config\n",
+		       (unsigned int)net_cfg.ip_mode);
+	}
 	app_print_ipv4_status(iface);
 
 	return 0;
@@ -959,7 +1111,7 @@ static int app_osc_transport_send_cv(uint8_t cv_index, float normalized)
 	int len;
 	int ret;
 
-	if (cv_index >= CV_CHANNEL_COUNT) {
+	if (cv_index >= ASYNTH_CV_CHANNEL_COUNT) {
 		return -EINVAL;
 	}
 
@@ -1730,7 +1882,7 @@ static void adc_settings_log_current(const char *origin)
 	       (unsigned int)hyst_mv);
 }
 
-static int __unused net_settings_init(void)
+static int net_settings_init(void)
 {
 	int ret;
 
@@ -1795,7 +1947,9 @@ static void net_settings_save_and_report(const char *key, const char *label, uin
 {
 	int ret;
 
-	if (net_settings_ready) {
+	menu_net_settings_dirty = true;
+
+	if (net_settings_ready && (current_mode != APP_MODE_MENU)) {
 		ret = settings_save_one(key, &value, sizeof(value));
 		if (ret < 0) {
 			printk("NETCFG: save failed for %s (%d)\n", label, ret);
@@ -1809,7 +1963,9 @@ static void adc_settings_save_and_report(const char *key, const char *label, uin
 {
 	int ret;
 
-	if (net_settings_ready) {
+	menu_adc_settings_dirty = true;
+
+	if (net_settings_ready && (current_mode != APP_MODE_MENU)) {
 		ret = settings_save_one(key, &value, sizeof(value));
 		if (ret < 0) {
 			printk("ADCCFG: save failed for %s (%d)\n", label, ret);
@@ -1824,7 +1980,9 @@ static void midi_settings_save_and_report(uint16_t value)
 {
 	int ret;
 
-	if (net_settings_ready) {
+	menu_midi_settings_dirty = true;
+
+	if (net_settings_ready && (current_mode != APP_MODE_MENU)) {
 		ret = settings_save_one(MIDI_SETTINGS_KEY_NOTE_THRU, &value, sizeof(value));
 		if (ret < 0) {
 			printk("MIDICFG: save failed for note_thru (%d)\n", ret);
@@ -1834,29 +1992,106 @@ static void midi_settings_save_and_report(uint16_t value)
 	printk("MIDICFG: note_thru=%u\n", (unsigned int)value);
 }
 
+static void menu_persist_pending_settings(void)
+{
+	int ret;
+
+	if (!net_settings_ready) {
+		menu_net_settings_dirty = false;
+		menu_adc_settings_dirty = false;
+		menu_midi_settings_dirty = false;
+		return;
+	}
+
+	if (menu_net_settings_dirty) {
+		ret = settings_save_one(NET_SETTINGS_KEY_IP_MODE, &net_cfg.ip_mode, sizeof(net_cfg.ip_mode));
+		if (ret < 0) {
+			printk("NETCFG: save failed for IP mode (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_TARGET_IP4, &net_cfg.target_ip4, sizeof(net_cfg.target_ip4));
+		if (ret < 0) {
+			printk("NETCFG: save failed for target IP (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_TARGET_PORT, &net_cfg.target_port, sizeof(net_cfg.target_port));
+		if (ret < 0) {
+			printk("NETCFG: save failed for target port (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_DEVICE_IP4, &net_cfg.device_ip4, sizeof(net_cfg.device_ip4));
+		if (ret < 0) {
+			printk("NETCFG: save failed for device IP (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_DEVICE_PORT, &net_cfg.device_port, sizeof(net_cfg.device_port));
+		if (ret < 0) {
+			printk("NETCFG: save failed for device port (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_CIDR_MASK, &net_cfg.cidr_mask, sizeof(net_cfg.cidr_mask));
+		if (ret < 0) {
+			printk("NETCFG: save failed for CIDR (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_IP_B1, &net_cfg.ip_b1, sizeof(net_cfg.ip_b1));
+		if (ret < 0) {
+			printk("NETCFG: save failed for IP b1 (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_IP_B2, &net_cfg.ip_b2, sizeof(net_cfg.ip_b2));
+		if (ret < 0) {
+			printk("NETCFG: save failed for IP b2 (%d)\n", ret);
+		}
+		ret = settings_save_one(NET_SETTINGS_KEY_IP_B3, &net_cfg.ip_b3, sizeof(net_cfg.ip_b3));
+		if (ret < 0) {
+			printk("NETCFG: save failed for IP b3 (%d)\n", ret);
+		}
+		menu_net_settings_dirty = false;
+	}
+
+	if (menu_adc_settings_dirty) {
+		ret = settings_save_one(ADC_SETTINGS_KEY_SAMPLE_PERIOD_MS,
+				      &cv_sample_period_ms,
+				      sizeof(cv_sample_period_ms));
+		if (ret < 0) {
+			printk("ADCCFG: save failed for sample_ms (%d)\n", ret);
+		}
+
+		ret = settings_save_one(ADC_SETTINGS_KEY_HYSTERESIS_PERMILLE,
+				      &cv_hysteresis_permille,
+				      sizeof(cv_hysteresis_permille));
+		if (ret < 0) {
+			printk("ADCCFG: save failed for hyst_permille (%d)\n", ret);
+		}
+		menu_adc_settings_dirty = false;
+	}
+
+	if (menu_midi_settings_dirty) {
+		ret = settings_save_one(MIDI_SETTINGS_KEY_NOTE_THRU, &midi_note_thru, sizeof(midi_note_thru));
+		if (ret < 0) {
+			printk("MIDICFG: save failed for note_thru (%d)\n", ret);
+		}
+		menu_midi_settings_dirty = false;
+	}
+}
+
 
 /*
 * @brief Initialize led's GPIO
 * @param structure gpio_dt_spec
 * @return 0 on success, log errors otherwise
 */
-int init_led(struct gpio_dt_spec led1)
+int init_led(const struct gpio_dt_spec *led1)
 {
 	int ret;
 
-	ret = gpio_is_ready_dt(&led1);
-	if (led1.port && !ret) {
-		printk("Error %d: LED device %s is not ready; ignoring it\n",
-		       ret, led1.port->name);
-		led1.port = NULL;
+	if ((led1 == NULL) || (led1->port == NULL)) {
+		return -EINVAL;
 	}
-	if (led1.port) {
-		ret = gpio_pin_configure_dt(&led1, GPIO_OUTPUT);
-		if (ret != 0) {
-			printk("Error %d: failed1 to configure LED device %s pin %d\n",
-			       ret, led1.port->name, led1.pin);
-			led1.port = NULL;
-		}
+
+	if (!gpio_is_ready_dt(led1)) {
+		printk("Error: LED device %s is not ready\n", led1->port->name);
+		return -ENODEV;
+	}
+
+	ret = gpio_pin_configure_dt(led1, GPIO_OUTPUT);
+	if (ret != 0) {
+		printk("Error %d: failed to configure LED device %s pin %d\n",
+		       ret, led1->port->name, led1->pin);
 	}
 
 	return ret;
@@ -1891,6 +2126,44 @@ static int triggers_init(void)
 		return level;
 	}
 	trigger_2_prev_state = asynth_ui_level_is_pressed(&trigger_2, level);
+	trigger_1_changed = false;
+	trigger_2_changed = false;
+	trigger_irq_enabled = false;
+
+	ret = gpio_pin_interrupt_configure_dt(&trigger_1, GPIO_INT_EDGE_BOTH);
+	if (ret < 0) {
+		printk("Trigger IRQ unavailable on trigger_1 (%d), fallback to polling\n", ret);
+		return 0;
+	}
+
+	ret = gpio_pin_interrupt_configure_dt(&trigger_2, GPIO_INT_EDGE_BOTH);
+	if (ret < 0) {
+		printk("Trigger IRQ unavailable on trigger_2 (%d), fallback to polling\n", ret);
+		(void)gpio_pin_interrupt_configure_dt(&trigger_1, GPIO_INT_DISABLE);
+		return 0;
+	}
+
+	gpio_init_callback(&trigger_1_cb_data, trigger_1_cb, BIT(trigger_1.pin));
+	ret = gpio_add_callback(trigger_1.port, &trigger_1_cb_data);
+	if (ret < 0) {
+		printk("Trigger callback add failed on trigger_1 (%d), fallback to polling\n", ret);
+		(void)gpio_pin_interrupt_configure_dt(&trigger_1, GPIO_INT_DISABLE);
+		(void)gpio_pin_interrupt_configure_dt(&trigger_2, GPIO_INT_DISABLE);
+		return 0;
+	}
+
+	gpio_init_callback(&trigger_2_cb_data, trigger_2_cb, BIT(trigger_2.pin));
+	ret = gpio_add_callback(trigger_2.port, &trigger_2_cb_data);
+	if (ret < 0) {
+		printk("Trigger callback add failed on trigger_2 (%d), fallback to polling\n", ret);
+		gpio_remove_callback(trigger_1.port, &trigger_1_cb_data);
+		(void)gpio_pin_interrupt_configure_dt(&trigger_1, GPIO_INT_DISABLE);
+		(void)gpio_pin_interrupt_configure_dt(&trigger_2, GPIO_INT_DISABLE);
+		return 0;
+	}
+
+	trigger_irq_enabled = true;
+	printk("Trigger inputs: IRQ mode enabled\n");
 
 	return 0;
 }
@@ -1985,6 +2258,9 @@ static void ui_enter_menu_mode(void)
 {
 	current_mode = APP_MODE_MENU;
 	current_menu_item = MENU_ITEM_NET_IP_MODE;
+	menu_net_settings_dirty = false;
+	menu_adc_settings_dirty = false;
+	menu_midi_settings_dirty = false;
 	ui_write_center_mode_hint();
 	ui_write_status_line();
 	ui_apply_button_visual_state();
@@ -1992,6 +2268,7 @@ static void ui_enter_menu_mode(void)
 
 static void ui_exit_menu_mode(void)
 {
+	menu_persist_pending_settings();
 	current_mode = APP_MODE_NORMAL;
 	ui_write_center_mode_hint();
 	ui_write_status_line();
@@ -2060,13 +2337,7 @@ static void cue_pending_commit_or_recall(void)
 		cue_pending_active = false;
 		cue_pending_visible = true;
 		asynth_display_print_cue(current_cue_value);
-
-		if (net_settings_ready) {
-			int ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE, &current_cue_value, sizeof(current_cue_value));
-			if (ret < 0) {
-				printk("CUE: save failed (%d)\n", ret);
-			}
-		}
+		cue_settings_request_save();
 	}
 
 	cue_send_recall(current_cue_value);
@@ -2147,6 +2418,7 @@ static void menu_apply_edit_step(int8_t direction)
 		adc_settings_save_and_report(ADC_SETTINGS_KEY_SAMPLE_PERIOD_MS,
 						"sample_ms",
 						(uint16_t)cv_sample_period_ms);
+		app_cv_sample_timer_restart();
 	} else if (current_menu_item == MENU_ITEM_HYSTERESIS) {
 		if (direction > 0) {
 			cv_hysteresis_permille += CV_HYSTERESIS_STEP_PERMILLE;
@@ -2219,6 +2491,7 @@ static void menu_reset_current_item_to_default(void)
 		adc_settings_save_and_report(ADC_SETTINGS_KEY_SAMPLE_PERIOD_MS,
 						"sample_ms",
 						(uint16_t)cv_sample_period_ms);
+		app_cv_sample_timer_restart();
 	} else if (current_menu_item == MENU_ITEM_HYSTERESIS) {
 		cv_hysteresis_permille = CV_HYSTERESIS_DEFAULT_PERMILLE;
 		cv_hysteresis_norm = ((float)cv_hysteresis_permille) / 1000.0f;
@@ -2278,10 +2551,7 @@ static void cue_apply_edit_step(int8_t direction)
 	}
 
 	if (net_settings_ready) {
-		int ret = settings_save_one(CUE_SETTINGS_KEY_CURRENT_VALUE, &current_cue_value, sizeof(current_cue_value));
-		if (ret < 0) {
-			printk("CUE: save failed (%d)\n", ret);
-		}
+		cue_settings_request_save();
 	}
 
 	asynth_display_print_cue(current_cue_value);
@@ -2427,39 +2697,76 @@ static bool process_button_events(void)
 
 static bool process_trigger_events(void)
 {
-	int level;
 	int ret;
-	bool state;
+	int level;
+	bool trigger_1_event;
+	bool trigger_2_event;
+	bool trigger_1_state;
+	bool trigger_2_state;
 	bool ui_dirty = false;
+	unsigned int key;
 
-	level = asynth_ui_pin_get_raw_dt(&trigger_1);
-	if (level >= 0) {
-		state = asynth_ui_level_is_pressed(&trigger_1, level);
-		if (state != trigger_1_prev_state) {
-			trigger_1_prev_state = state;
-			asynth_display_act_t1();
-			ret = asynth_osc_send_trigger(0U, state);
-			if (ret < 0) {
-				printk("OSC send Trigger1 failed (%d)\n", ret);
+	if (!trigger_irq_enabled) {
+		level = asynth_ui_pin_get_raw_dt(&trigger_1);
+		if (level >= 0) {
+			trigger_1_state = asynth_ui_level_is_pressed(&trigger_1, level);
+			if (trigger_1_state != trigger_1_prev_state) {
+				trigger_1_prev_state = trigger_1_state;
+				asynth_display_act_t1();
+				ret = asynth_osc_send_trigger(0U, trigger_1_state);
+				if (ret < 0) {
+					printk("OSC send Trigger1 failed (%d)\n", ret);
+				}
+				TRIGGER_EVENT_LOG("Trigger 1 %s\n", trigger_1_state ? "ON" : "OFF");
+				ui_dirty = true;
 			}
-			TRIGGER_EVENT_LOG("Trigger 1 %s\n", state ? "ON" : "OFF");
-			ui_dirty = true;
 		}
+
+		level = asynth_ui_pin_get_raw_dt(&trigger_2);
+		if (level >= 0) {
+			trigger_2_state = asynth_ui_level_is_pressed(&trigger_2, level);
+			if (trigger_2_state != trigger_2_prev_state) {
+				trigger_2_prev_state = trigger_2_state;
+				asynth_display_act_t2();
+				ret = asynth_osc_send_trigger(1U, trigger_2_state);
+				if (ret < 0) {
+					printk("OSC send Trigger2 failed (%d)\n", ret);
+				}
+				TRIGGER_EVENT_LOG("Trigger 2 %s\n", trigger_2_state ? "ON" : "OFF");
+				ui_dirty = true;
+			}
+		}
+
+		return ui_dirty;
 	}
 
-	level = asynth_ui_pin_get_raw_dt(&trigger_2);
-	if (level >= 0) {
-		state = asynth_ui_level_is_pressed(&trigger_2, level);
-		if (state != trigger_2_prev_state) {
-			trigger_2_prev_state = state;
-			asynth_display_act_t2();
-			ret = asynth_osc_send_trigger(1U, state);
-			if (ret < 0) {
-				printk("OSC send Trigger2 failed (%d)\n", ret);
-			}
-			TRIGGER_EVENT_LOG("Trigger 2 %s\n", state ? "ON" : "OFF");
-			ui_dirty = true;
+	key = irq_lock();
+	trigger_1_event = trigger_1_changed;
+	trigger_2_event = trigger_2_changed;
+	trigger_1_state = trigger_1_prev_state;
+	trigger_2_state = trigger_2_prev_state;
+	trigger_1_changed = false;
+	trigger_2_changed = false;
+	irq_unlock(key);
+
+	if (trigger_1_event) {
+		asynth_display_act_t1();
+		ret = asynth_osc_send_trigger(0U, trigger_1_state);
+		if (ret < 0) {
+			printk("OSC send Trigger1 failed (%d)\n", ret);
 		}
+		TRIGGER_EVENT_LOG("Trigger 1 %s\n", trigger_1_state ? "ON" : "OFF");
+		ui_dirty = true;
+	}
+
+	if (trigger_2_event) {
+		asynth_display_act_t2();
+		ret = asynth_osc_send_trigger(1U, trigger_2_state);
+		if (ret < 0) {
+			printk("OSC send Trigger2 failed (%d)\n", ret);
+		}
+		TRIGGER_EVENT_LOG("Trigger 2 %s\n", trigger_2_state ? "ON" : "OFF");
+		ui_dirty = true;
 	}
 
 	return ui_dirty;
@@ -2489,8 +2796,19 @@ int main(void)
 	uint8_t font_width;
 	uint8_t font_height;
 	int ret;
-	int64_t next_cv_sample_ms;
 	uint32_t midi_diag_last_log_ms = 0U;
+	uint32_t next_noncrit_service_ms;
+	uint32_t next_display_flush_ms;
+	bool display_flush_pending = false;
+#if defined(CONFIG_ASYNTH_TIMING_DIAG)
+	uint32_t timing_diag_last_log_ms = k_uptime_get_32();
+	uint32_t timing_diag_loop_max_ms = 0U;
+	uint32_t timing_diag_cv_interval_max_ms = 0U;
+	uint32_t timing_diag_cv_interval_min_ms = UINT32_MAX;
+	uint32_t timing_diag_cv_jitter_max_ms = 0U;
+	uint32_t timing_diag_cv_samples = 0U;
+	uint32_t timing_diag_last_cv_ms = 0U;
+#endif
 	const struct asynth_ui_input_pins ui_pins = {
 		.left_button = &left_button,
 		.right_button = &right_button,
@@ -2506,8 +2824,15 @@ int main(void)
 	printk("Asynth2OSC build: %s\n", ASYNTH_BUILD_ID);
 
 	// Initialize top left right buttons leds
-	init_led(left_led);
-	init_led(right_led);
+	ret = init_led(&left_led);
+	if (ret < 0) {
+		printk("WARN: left LED init failed (%d)\n", ret);
+	}
+
+	ret = init_led(&right_led);
+	if (ret < 0) {
+		printk("WARN: right LED init failed (%d)\n", ret);
+	}
 	// turn them off
 	ret = gpio_pin_toggle_dt(&right_led);
 	if (ret < 0) {
@@ -2640,6 +2965,7 @@ int main(void)
 
 	// Invert whole display once for proper color scheme
 	cfb_framebuffer_invert(oled);
+	asynth_cv_reset_display_cache();
 
 	// LEFT RIGHT Prev and Next button design
 	// Permanently invert those areas (white background) to figure left and right button
@@ -2684,12 +3010,15 @@ int main(void)
 	app_osc_transport_configure();
 	app_boot_mark(APP_BOOT_STAGE_OSC_READY);
 
-	next_cv_sample_ms = k_uptime_get();
+	k_timer_init(&cv_sample_timer, app_cv_sample_timer_cb, NULL);
+	app_cv_sample_timer_restart();
 	idle_next_active = false;
 	idle_next_led_on = false;
 	idle_next_led_toggle_ms = k_uptime_get_32();
-	app_net_activity_pending = false;
+	atomic_clear(&app_net_activity_pending);
 	app_net_next_activity_blink_ms = k_uptime_get_32();
+	next_noncrit_service_ms = k_uptime_get_32();
+	next_display_flush_ms = k_uptime_get_32();
 	app_boot_mark(APP_BOOT_STAGE_MAIN_LOOP);
 
 	/* 
@@ -2697,23 +3026,81 @@ int main(void)
 	*/
 
 	while (1) {
-		bool ui_dirty = process_button_events();
+		bool ui_dirty = false;
+		bool service_noncritical = true;
 		uint32_t now_ms = k_uptime_get_32();
 		uint32_t dropped;
+		bool normal_mode = (current_mode == APP_MODE_NORMAL);
+#if defined(CONFIG_ASYNTH_TIMING_DIAG)
+		uint32_t loop_start_ms = now_ms;
+#endif
 
-		asynth_midi_poll_fallback();
-		asynth_midi_sample_uart_errors();
+		if (normal_mode) {
+			if (process_trigger_events()) {
+				ui_dirty = true;
+			}
 
-		if (asynth_midi_process_events()) {
+			if ((int32_t)(now_ms - next_noncrit_service_ms) < 0) {
+				service_noncritical = false;
+			} else {
+				next_noncrit_service_ms = now_ms + NONCRIT_SERVICE_INTERVAL_MS;
+			}
+		}
+
+		if (k_sem_take(&cv_sample_sem, K_NO_WAIT) == 0) {
+			atomic_clear(&cv_sample_pending);
+			ret = asynth_cv_sample_and_process(cv_hysteresis_norm);
+			if (ret == 0) {
+				asynth_cv_refresh_bars();
+			}
+#if defined(CONFIG_ASYNTH_TIMING_DIAG)
+			{
+				uint32_t cv_now_ms = k_uptime_get_32();
+
+				if (timing_diag_last_cv_ms != 0U) {
+					uint32_t interval_ms = cv_now_ms - timing_diag_last_cv_ms;
+					uint32_t jitter_ms;
+
+					if (interval_ms > timing_diag_cv_interval_max_ms) {
+						timing_diag_cv_interval_max_ms = interval_ms;
+					}
+					if (interval_ms < timing_diag_cv_interval_min_ms) {
+						timing_diag_cv_interval_min_ms = interval_ms;
+					}
+
+					if (interval_ms >= cv_sample_period_ms) {
+						jitter_ms = interval_ms - cv_sample_period_ms;
+					} else {
+						jitter_ms = cv_sample_period_ms - interval_ms;
+					}
+
+					if (jitter_ms > timing_diag_cv_jitter_max_ms) {
+						timing_diag_cv_jitter_max_ms = jitter_ms;
+					}
+				}
+				timing_diag_last_cv_ms = cv_now_ms;
+				timing_diag_cv_samples++;
+			}
+#endif
+
 			ui_dirty = true;
 		}
 
-		if (app_osc_poll_rx()) {
+		ui_dirty = process_button_events() || ui_dirty;
+
+		asynth_midi_sample_uart_errors();
+
+		if (normal_mode ? asynth_midi_process_events_budget(MIDI_PROCESS_BUDGET_NORMAL)
+				: asynth_midi_process_events()) {
+			ui_dirty = true;
+		}
+
+		if (service_noncritical && app_osc_poll_rx()) {
 			ui_dirty = true;
 		}
 
 #if defined(CONFIG_NETWORKING)
-		if ((int32_t)(now_ms - app_net_next_poll_ms) >= 0) {
+		if (service_noncritical && (int32_t)(now_ms - app_net_next_poll_ms) >= 0) {
 			bool link_up_now = app_network_link_up(NULL);
 
 			app_net_next_poll_ms = now_ms + NET_LINK_POLL_INTERVAL_MS;
@@ -2724,13 +3111,12 @@ int main(void)
 			}
 		}
 
-		if (app_net_indicator_pending) {
-			app_net_indicator_pending = false;
-			asynth_display_set_n(app_net_indicator_state);
+		if (service_noncritical && atomic_cas(&app_net_indicator_pending, 1, 0)) {
+			asynth_display_set_n(atomic_get(&app_net_indicator_state) != 0);
 			ui_dirty = true;
 		}
 
-		if (app_network_activity_service(now_ms)) {
+		if (service_noncritical && app_network_activity_service(now_ms)) {
 			ui_dirty = true;
 		}
 #endif
@@ -2740,45 +3126,77 @@ int main(void)
 			printk("MIDI IN: dropped %u bytes (queue full)\n", (unsigned int)dropped);
 		}
 
-		asynth_midi_log_diag(&midi_diag_last_log_ms);
+		if (service_noncritical) {
+			asynth_midi_log_diag(&midi_diag_last_log_ms);
+		}
 
-		if (process_trigger_events()) {
+		if (!normal_mode && process_trigger_events()) {
 			ui_dirty = true;
 		}
 
-		if (asynth_display_tick_status_message_scroll()) {
+		if (service_noncritical && asynth_display_tick_status_message_scroll()) {
 			ui_dirty = true;
 		}
 
-		if (cue_pending_tick(now_ms)) {
+		if (service_noncritical && cue_pending_tick(now_ms)) {
 			ui_dirty = true;
 		}
 
-		if (app_idle_tick(now_ms)) {
+		if (service_noncritical && app_idle_tick(now_ms)) {
 			ui_dirty = true;
 		}
 
-		if (asynth_display_tick_activity(now_ms)) {
+		if (service_noncritical && asynth_display_tick_activity(now_ms)) {
 			ui_dirty = true;
 		}
 
-		if (k_uptime_get() >= next_cv_sample_ms) {
-			ret = asynth_cv_sample_and_process(cv_hysteresis_norm);
-			if (ret == 0) {
-				asynth_cv_refresh_bars();
-			}
-
-			//if (current_mode == APP_MODE_NORMAL && !cue_pending_active) {
-			//	asynth_display_print_cue(current_cue_value);
-			//}
-
-			ui_dirty = true;
-			next_cv_sample_ms = k_uptime_get() + cv_sample_period_ms;
+		if (!normal_mode && cue_settings_dirty) {
+			cue_settings_save_sync();
 		}
 
 		if (ui_dirty) {
-			cfb_framebuffer_finalize(oled);
+			display_flush_pending = true;
 		}
+
+		if (display_flush_pending && ((int32_t)(now_ms - next_display_flush_ms) >= 0)) {
+			cfb_framebuffer_finalize(oled);
+			display_flush_pending = false;
+			next_display_flush_ms = now_ms + DISPLAY_FLUSH_MIN_INTERVAL_MS;
+		}
+#if defined(CONFIG_ASYNTH_TIMING_DIAG)
+		{
+			uint32_t loop_elapsed_ms = k_uptime_get_32() - loop_start_ms;
+			uint32_t cv_timer_overruns = (uint32_t)atomic_get(&cv_timer_overrun_count);
+			uint32_t cv_timer_ticks = (uint32_t)atomic_get(&cv_timer_tick_count);
+
+			if (loop_elapsed_ms > timing_diag_loop_max_ms) {
+				timing_diag_loop_max_ms = loop_elapsed_ms;
+			}
+
+			if ((uint32_t)(now_ms - timing_diag_last_log_ms) >= ASYNTH_TIMING_DIAG_LOG_PERIOD_MS) {
+				uint32_t cv_min = (timing_diag_cv_interval_min_ms == UINT32_MAX) ? 0U : timing_diag_cv_interval_min_ms;
+				uint32_t midi_drops = asynth_midi_take_drop_count();
+
+				printk("TIMING: mode=%s loop_max=%u ms cv_period=%u ms cv_interval_min=%u ms cv_interval_max=%u ms cv_jitter_max=%u ms cv_samples=%u cv_timer_ticks=%u cv_timer_overruns=%u midi_drops=%u\n",
+				       normal_mode ? "normal" : "menu",
+				       (unsigned int)timing_diag_loop_max_ms,
+				       (unsigned int)cv_sample_period_ms,
+				       (unsigned int)cv_min,
+				       (unsigned int)timing_diag_cv_interval_max_ms,
+				       (unsigned int)timing_diag_cv_jitter_max_ms,
+				       (unsigned int)timing_diag_cv_samples,
+				       (unsigned int)cv_timer_ticks,
+				       (unsigned int)cv_timer_overruns,
+				       (unsigned int)midi_drops);
+				timing_diag_last_log_ms = now_ms;
+				timing_diag_loop_max_ms = 0U;
+				timing_diag_cv_interval_max_ms = 0U;
+				timing_diag_cv_interval_min_ms = UINT32_MAX;
+				timing_diag_cv_jitter_max_ms = 0U;
+				timing_diag_cv_samples = 0U;
+			}
+		}
+#endif
 		k_sleep(K_MSEC(5));
 	}
 	return 0;

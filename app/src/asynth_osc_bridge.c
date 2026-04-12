@@ -6,11 +6,10 @@
  */
 
 #include <app/asynth_osc_bridge.h>
+#include <app/asynth_cv.h>
 
 #include <errno.h>
 #include <zephyr/sys/util.h>
-
-#define CV_CHANNEL_COUNT 4U
 
 #define MIDI_CHANNEL_MAX       15U
 #define MIDI_DATA_MAX          127U
@@ -26,15 +25,6 @@ static struct asynth_osc_transport_ops transport_ops;
 static int asynth_osc_validate_cv(float normalized)
 {
 	if (normalized < 0.0f || normalized > 1.0f) {
-		return -ERANGE;
-	}
-
-	return 0;
-}
-
-static int asynth_osc_validate_trigger(bool active)
-{
-	if ((active != false) && (active != true)) {
 		return -ERANGE;
 	}
 
@@ -115,7 +105,7 @@ int asynth_osc_send_cv(uint8_t cv_index, float normalized)
 {
 	int ret;
 
-	if (cv_index >= CV_CHANNEL_COUNT) {
+	if (cv_index >= ASYNTH_CV_CHANNEL_COUNT) {
 		return -EINVAL;
 	}
 
@@ -139,15 +129,8 @@ int asynth_osc_send_cv(uint8_t cv_index, float normalized)
 
 int asynth_osc_send_trigger(uint8_t trigger_index, bool active)
 {
-	int ret;
-
 	if (trigger_index > 1U) {
 		return -EINVAL;
-	}
-
-	ret = asynth_osc_validate_trigger(active);
-	if (ret < 0) {
-		return ret;
 	}
 
 	if (transport_enabled) {
