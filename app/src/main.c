@@ -27,6 +27,12 @@
 #include <zephyr/net/net_event.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/socket.h>
+#if defined(CONFIG_NET_DHCPV4)
+#include <zephyr/net/dhcpv4.h>
+#endif
+#if defined(CONFIG_NET_IPV4_AUTO)
+#include <zephyr/net/ipv4_autoconf.h>
+#endif
 #include <app/lib/tinyosc.h>
 #endif
 #include <stdio.h>
@@ -75,6 +81,7 @@ const struct device *oled;
 #define IDLE_LED_TOGGLE_INTERVAL_MS 125U
 #define NET_LINK_POLL_INTERVAL_MS 250U
 #define NET_ACTIVITY_BLINK_MIN_INTERVAL_MS 80U
+#define NET_DHCP_LEASE_TIMEOUT_MS 15000U
 #define MIDI_PROCESS_BUDGET_NORMAL 96U
 #define DISPLAY_FLUSH_MIN_INTERVAL_MS 20U
 #define NONCRIT_SERVICE_INTERVAL_MS 10U
@@ -527,6 +534,14 @@ static void app_boot_mark_error(uint32_t stage, int err)
 			    NET_EVENT_L4_CONNECTED | NET_EVENT_L4_DISCONNECTED | \
 			    NET_EVENT_IPV4_ADDR_ADD | NET_EVENT_IPV4_ADDR_DEL)
 
+enum app_net_ip_source {
+	APP_NET_IP_SRC_UNKNOWN = 0,
+	APP_NET_IP_SRC_STATIC,
+	APP_NET_IP_SRC_DHCP,
+	APP_NET_IP_SRC_LL,
+	APP_NET_IP_SRC_FB_STATIC,
+};
+
 static struct net_mgmt_event_callback app_net_mgmt_cb;
 static int app_osc_sock_fd = -1;
 static struct sockaddr_in app_osc_remote_addr;
@@ -538,6 +553,24 @@ static atomic_t app_net_activity_pending = ATOMIC_INIT(0);
 static bool app_net_last_link_up;
 static uint32_t app_net_next_poll_ms;
 static uint32_t app_net_next_activity_blink_ms;
+static bool app_net_waiting_dhcp_lease;
+static uint32_t app_net_dhcp_deadline_ms;
+static struct in_addr app_net_last_ipv4_addr;
+static bool app_net_last_ipv4_valid;
+static enum app_net_ip_source app_net_ip_source_hint = APP_NET_IP_SRC_UNKNOWN;
+
+static void app_print_ipv4_status(struct net_if *iface);
+static const struct in_addr *app_network_get_active_ipv4_addr(struct net_if *iface);
+
+static void app_osc_reset_socket(void)
+{
+	if (app_osc_sock_fd >= 0) {
+		(void)zsock_close(app_osc_sock_fd);
+		app_osc_sock_fd = -1;
+	}
+
+	app_osc_sock_bound = false;
+}
 
 static bool app_network_ready_for_tx(void)
 {
@@ -559,7 +592,7 @@ static bool app_network_ready_for_tx(void)
 		return false;
 	}
 
-	return net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED) != NULL;
+	return app_network_get_active_ipv4_addr(iface) != NULL;
 }
 
 static bool app_network_link_up(struct net_if *iface)
@@ -588,6 +621,132 @@ static void app_network_indicator_update(struct net_if *iface)
 static void app_network_activity_mark(void)
 {
 	atomic_set(&app_net_activity_pending, 1);
+}
+
+static const struct in_addr *app_network_get_active_ipv4_addr(struct net_if *iface)
+{
+	const struct in_addr *addr;
+
+	if (!iface) {
+		iface = net_if_get_default();
+	}
+
+	if (!iface) {
+		return NULL;
+	}
+
+	addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+	if (addr != NULL) {
+		return addr;
+	}
+
+	return net_if_ipv4_get_ll(iface, NET_ADDR_PREFERRED);
+}
+
+static const char *app_net_ip_source_to_str(enum app_net_ip_source src)
+{
+	switch (src) {
+	case APP_NET_IP_SRC_STATIC:
+		return "STATIC";
+	case APP_NET_IP_SRC_DHCP:
+		return "DHCP";
+	case APP_NET_IP_SRC_LL:
+		return "LL";
+	case APP_NET_IP_SRC_FB_STATIC:
+		return "FB";
+	default:
+		return "AUTO";
+	}
+}
+
+static enum net_addr_type app_network_get_ipv4_addr_type(struct net_if *iface)
+{
+	const struct in_addr *addr;
+	struct net_if *addr_iface;
+	struct net_if_addr *ifaddr;
+
+	if (!iface) {
+		iface = net_if_get_default();
+	}
+
+	if (!iface) {
+		return NET_ADDR_ANY;
+	}
+
+	addr = app_network_get_active_ipv4_addr(iface);
+	if (addr == NULL) {
+		return NET_ADDR_ANY;
+	}
+
+	ifaddr = net_if_ipv4_addr_lookup(addr, &addr_iface);
+	if (ifaddr == NULL) {
+		return NET_ADDR_ANY;
+	}
+
+	return ifaddr->addr_type;
+}
+
+static enum app_net_ip_source app_network_get_ipv4_log_source(struct net_if *iface)
+{
+	enum net_addr_type addr_type = app_network_get_ipv4_addr_type(iface);
+
+	switch (addr_type) {
+	case NET_ADDR_DHCP:
+		return APP_NET_IP_SRC_DHCP;
+	case NET_ADDR_AUTOCONF:
+		return APP_NET_IP_SRC_LL;
+	case NET_ADDR_MANUAL:
+	case NET_ADDR_OVERRIDABLE:
+		if (app_net_ip_source_hint == APP_NET_IP_SRC_FB_STATIC) {
+			return APP_NET_IP_SRC_FB_STATIC;
+		}
+		return APP_NET_IP_SRC_STATIC;
+	case NET_ADDR_ANY:
+	default:
+		return app_net_ip_source_hint;
+	}
+}
+
+static void app_network_log_ipv4_change(struct net_if *iface)
+{
+	const struct in_addr *addr;
+	char addr_buf[NET_IPV4_ADDR_LEN];
+	enum app_net_ip_source log_source;
+
+	if (!iface) {
+		iface = net_if_get_default();
+	}
+
+	if (!iface) {
+		return;
+	}
+
+	addr = app_network_get_active_ipv4_addr(iface);
+	if (addr == NULL) {
+		if (app_net_last_ipv4_valid) {
+			app_net_last_ipv4_valid = false;
+			printk("NET: IPv4 address lost (%s)\n",
+			       app_net_ip_source_to_str(app_net_ip_source_hint));
+		}
+		return;
+	}
+
+	if (app_net_last_ipv4_valid && (memcmp(addr, &app_net_last_ipv4_addr, sizeof(*addr)) == 0)) {
+		return;
+	}
+
+	log_source = app_network_get_ipv4_log_source(iface);
+
+	if (!net_addr_ntop(AF_INET, addr, addr_buf, sizeof(addr_buf))) {
+		printk("NET: IPv4 changed (format error)\n");
+	} else {
+		printk("NET: IPv4 changed (%s) -> %s\n",
+		       app_net_ip_source_to_str(log_source),
+		       addr_buf);
+	}
+
+	app_net_last_ipv4_addr = *addr;
+	app_net_last_ipv4_valid = true;
 }
 
 static bool app_network_activity_service(uint32_t now_ms)
@@ -646,6 +805,123 @@ static int app_network_apply_static_config(struct net_if *iface)
 	       (unsigned int)net_cfg.cidr_mask);
 
 	return 0;
+}
+
+static void app_network_clear_ipv4_addresses(struct net_if *iface)
+{
+	const struct in_addr *addr;
+	struct in_addr addr_copy;
+	uint8_t attempts = 0U;
+
+	while (attempts < 4U) {
+		addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+		if (addr == NULL) {
+			break;
+		}
+
+		addr_copy = *addr;
+		if (!net_if_ipv4_addr_rm(iface, &addr_copy)) {
+			break;
+		}
+
+		attempts++;
+	}
+}
+
+static void app_network_apply_mode_fallback(struct net_if *iface, const char *reason)
+{
+	if (net_cfg.ip_mode == 1U) {
+#if defined(CONFIG_NET_IPV4_AUTO)
+		app_net_ip_source_hint = APP_NET_IP_SRC_LL;
+		net_ipv4_autoconf_start(iface);
+		printk("NETCFG: DHCP timeout (%s), fallback to link-local auto IP\n", reason);
+#else
+		printk("NETCFG: DHCP timeout (%s), link-local unavailable (CONFIG_NET_IPV4_AUTO=n)\n",
+		       reason);
+#endif
+		return;
+	}
+
+	if (net_cfg.ip_mode == 2U) {
+		int ret = app_network_apply_static_config(iface);
+
+		app_net_ip_source_hint = APP_NET_IP_SRC_FB_STATIC;
+
+		if (ret < 0) {
+			printk("NETCFG: DHCP timeout (%s), static fallback failed (%d)\n", reason, ret);
+		} else {
+			printk("NETCFG: DHCP timeout (%s), fallback to static applied\n", reason);
+		}
+	}
+}
+
+static void app_network_start_mode(struct net_if *iface)
+{
+	app_net_waiting_dhcp_lease = false;
+
+	if (net_cfg.ip_mode == 0U) {
+		int ret = app_network_apply_static_config(iface);
+
+		app_net_ip_source_hint = APP_NET_IP_SRC_STATIC;
+
+		if (ret < 0) {
+			printk("NETCFG: runtime static IP apply failed (%d)\n", ret);
+		}
+		return;
+	}
+
+	app_network_clear_ipv4_addresses(iface);
+#if defined(CONFIG_NET_IPV4_AUTO)
+	net_ipv4_autoconf_reset(iface);
+#endif
+
+#if defined(CONFIG_NET_DHCPV4)
+	app_net_ip_source_hint = APP_NET_IP_SRC_DHCP;
+	net_dhcpv4_stop(iface);
+	net_dhcpv4_start(iface);
+	app_net_waiting_dhcp_lease = true;
+	app_net_dhcp_deadline_ms = k_uptime_get_32() + NET_DHCP_LEASE_TIMEOUT_MS;
+	printk("NETCFG: DHCP start (mode=%u), waiting %u ms for lease\n",
+	       (unsigned int)net_cfg.ip_mode,
+	       (unsigned int)NET_DHCP_LEASE_TIMEOUT_MS);
+#else
+	printk("NETCFG: DHCP unavailable (CONFIG_NET_DHCPV4=n), applying fallback for mode=%u\n",
+	       (unsigned int)net_cfg.ip_mode);
+	app_network_apply_mode_fallback(iface, "dhcp-disabled");
+#endif
+}
+
+static void app_network_mode_service(uint32_t now_ms)
+{
+	struct net_if *iface;
+
+	if (!app_net_waiting_dhcp_lease) {
+		return;
+	}
+
+	iface = net_if_get_default();
+	if (iface == NULL) {
+		return;
+	}
+
+	if (app_network_get_ipv4_addr_type(iface) == NET_ADDR_DHCP) {
+		app_net_waiting_dhcp_lease = false;
+		app_net_ip_source_hint = APP_NET_IP_SRC_DHCP;
+		printk("NETCFG: DHCP lease acquired before timeout\n");
+		app_print_ipv4_status(iface);
+		app_network_log_ipv4_change(iface);
+		return;
+	}
+
+	if ((int32_t)(now_ms - app_net_dhcp_deadline_ms) < 0) {
+		return;
+	}
+
+	app_net_waiting_dhcp_lease = false;
+#if defined(CONFIG_NET_DHCPV4)
+	net_dhcpv4_stop(iface);
+#endif
+	app_network_apply_mode_fallback(iface, "lease-timeout");
 }
 
 static int app_osc_send_packet(const char *packet,
@@ -992,7 +1268,7 @@ static void app_print_ipv4_status(struct net_if *iface)
 		return;
 	}
 
-	addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+	addr = app_network_get_active_ipv4_addr(iface);
 	if (!addr) {
 		printk("NET: IPv4 not assigned yet\n");
 		return;
@@ -1069,6 +1345,8 @@ static int app_network_init(void)
 	net_mgmt_add_event_callback(&app_net_mgmt_cb);
 	app_net_last_link_up = app_network_link_up(iface);
 	app_net_next_poll_ms = k_uptime_get_32();
+	app_net_last_ipv4_valid = false;
+	app_net_ip_source_hint = APP_NET_IP_SRC_UNKNOWN;
 	atomic_set(&app_net_indicator_state, app_net_last_link_up ? 1 : 0);
 	atomic_set(&app_net_indicator_pending, 1);
 
@@ -1090,16 +1368,9 @@ static int app_network_init(void)
 	}
 
 	printk("NET: Ethernet bring-up requested\n");
-	if (net_cfg.ip_mode == 0U) {
-		ret = app_network_apply_static_config(iface);
-		if (ret < 0) {
-			printk("NETCFG: runtime static IP apply failed (%d)\n", ret);
-		}
-	} else {
-		printk("NETCFG: ip_mode=%u keeps Zephyr network auto config\n",
-		       (unsigned int)net_cfg.ip_mode);
-	}
+	app_network_start_mode(iface);
 	app_print_ipv4_status(iface);
+	app_network_log_ipv4_change(iface);
 
 	return 0;
 }
@@ -2197,7 +2468,13 @@ static void ui_write_status_line(void)
 			asynth_display_print_cue(value);
 			break;
 		case MENU_ITEM_NET_IP_MODE:
-			asynth_display_print_msg("IP Mode");
+			if (net_cfg.ip_mode == 0U) {
+				asynth_display_print_msg("IP Static");
+			} else if (net_cfg.ip_mode == 1U) {
+				asynth_display_print_msg("IP DHCP+LL");
+			} else {
+				asynth_display_print_msg("IP DHCP+FB");
+			}
 			asynth_display_print_cue(net_cfg.ip_mode);
 			break;
 		case MENU_ITEM_NET_TARGET_IP4:
@@ -2268,6 +2545,8 @@ static void ui_enter_menu_mode(void)
 
 static void ui_exit_menu_mode(void)
 {
+	bool net_settings_were_dirty = menu_net_settings_dirty;
+
 	menu_persist_pending_settings();
 	current_mode = APP_MODE_NORMAL;
 	ui_write_center_mode_hint();
@@ -2278,6 +2557,14 @@ static void ui_exit_menu_mode(void)
 #if defined(CONFIG_NETWORKING)
 	if (asynth_osc_is_transport_enabled()) {
 		int ret;
+		struct net_if *iface = net_if_get_default();
+
+		if (net_settings_were_dirty) {
+			app_osc_reset_socket();
+			if (iface != NULL) {
+				app_network_start_mode(iface);
+			}
+		}
 
 		app_osc_remote_addr_ready = false;
 		ret = app_osc_update_remote_addr();
@@ -3109,6 +3396,11 @@ int main(void)
 				asynth_display_set_n(link_up_now);
 				ui_dirty = true;
 			}
+		}
+
+		if (service_noncritical) {
+			app_network_mode_service(now_ms);
+			app_network_log_ipv4_change(NULL);
 		}
 
 		if (service_noncritical && atomic_cas(&app_net_indicator_pending, 1, 0)) {
