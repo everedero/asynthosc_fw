@@ -1,0 +1,53 @@
+description: |
+  STM32 DAC audio output implementing the Zephyr audio_codec_api.
+  Uses a basic hardware timer (TIM6 or TIM7) to trigger DMA-driven DAC
+  conversions at the configured sample rate.
+
+  Two peripheral address ranges: [0] DAC base, [1] timer base.
+  Two clock entries: DAC clock then timer clock (matching reg-names order).
+  One DMA channel named "tx" for audio output.
+
+compatible: "st,stm32-dac-audio"
+
+include: [pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+    type: array
+    description: |
+      Two address ranges: index 0 = DAC peripheral base (0x40007400 for DAC1),
+      index 1 = basic timer base (0x40001000 for TIM6).
+
+  reg-names:
+    required: true
+    type: string-array
+    description: '"dac" and "tim".'
+
+  clocks:
+    required: true
+    type: phandle-array
+    description: DAC clock then timer clock, in reg-names order.
+
+  clock-names:
+    required: true
+    type: string-array
+    description: '"dac" and "tim".'
+
+  dmas:
+    required: true
+    type: phandle-array
+    description: |
+      Single TX DMA channel. DMAMUX request = DAC channel 1
+      (LL_DMAMUX1_REQ_DAC1_CH1 = 67 on STM32H7).
+
+  dma-names:
+    required: true
+    type: string-array
+    description: '"tx"'
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true

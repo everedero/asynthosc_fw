@@ -1,5 +1,6 @@
 board:
   name: asynthosc
+  full_name: RederoTech AsynthOsc
   vendor: rederotech
   socs:
     - name: stm32h743xx

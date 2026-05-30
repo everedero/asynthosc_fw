@@ -1,0 +1,55 @@
+#include <zephyr/dt-bindings/dma/stm32_dma.h>
+
+/ {
+	aliases {
+		codec0 = &dac_audio0;
+	};
+
+	dac_audio0: dac-audio@40007400 {
+		compatible = "st,stm32-dac-audio";
+		/*
+		 * [0] DAC1 base  0x40007400
+		 * [1] TIM6 base  0x40001000
+		 */
+		reg = <0x40007400 0x400>,
+		      <0x40001000 0x400>;
+		reg-names = "dac", "tim";
+		/*
+		 * [0] DAC1 clock: APB1 bit 29 (RCC_APB1LENR_DAC12EN)
+		 * [1] TIM6 clock: APB1 bit 4  (RCC_APB1LENR_TIM6EN)
+		 */
+		clocks = <&rcc STM32_CLOCK(APB1, 29)>,
+			 <&rcc STM32_CLOCK(APB1, 4)>;
+		clock-names = "dac", "tim";
+		/*
+		 * DMA1 stream 1 (channel cell = 1 because STM32H7 DMA uses offset 1,
+		 * so DTS streams are numbered 1..8 → actual hardware stream 0..7).
+		 * DMAMUX1 request 67 = LL_DMAMUX1_REQ_DAC1_CH1.
+		 * MEM→PERIPH, memory-increment, 16-bit widths, high priority.
+		 */
+		dmas = <&dma1 1 67
+			(STM32_DMA_PERIPH_TX | STM32_DMA_16BITS | STM32_DMA_PRIORITY_HIGH)
+			0>;
+		dma-names = "tx";
+		pinctrl-0 = <&dac1_out1_pa4>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+/* Enable DMA1 and its DMAMUX so the STM32 DMA driver is compiled */
+&dma1 {
+	status = "okay";
+};
+
+&dmamux1 {
+	status = "okay";
+};
+
+/*
+ * The plain DAC driver and our audio driver both own DAC1 hardware.
+ * Disable the plain driver so there is no conflict.
+ */
+&dac1 {
+	status = "disabled";
+};

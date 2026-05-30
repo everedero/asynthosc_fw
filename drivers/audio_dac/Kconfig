@@ -1,0 +1,10 @@
+config DAC_AUDIO_STM32
+	bool "STM32 DAC audio codec driver"
+	depends on DT_HAS_ST_STM32_DAC_AUDIO_ENABLED
+	select AUDIO_CODEC
+	select DMA
+	select PINCTRL
+	help
+	  Audio output driver implementing audio_codec_api using an STM32 DAC
+	  with timer-triggered DMA waveform generation. Supports any sample rate
+	  that is an exact integer divisor of the timer peripheral clock.
