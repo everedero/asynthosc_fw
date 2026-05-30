@@ -24,8 +24,8 @@ LOG_MODULE_REGISTER(dac_audio_sample, LOG_LEVEL_INF);
 #define BLOCK_SAMPLES 256U
 #define BLOCK_BYTES   (BLOCK_SAMPLES * sizeof(uint16_t))
 
-/* 440 Hz step in Q16.16 fixed-point: (440 * 65536) / 48000 ≈ 600 */
-#define FREQ_STEP_440HZ  ((uint32_t)((440ULL << 16) / SAMPLE_RATE))
+/* DDS phase step: freq × 2^32 / sample_rate; index = top 8 bits of accumulator */
+#define FREQ_STEP_440HZ  ((uint32_t)((440ULL << 32) / SAMPLE_RATE))
 
 static const struct device *codec_dev = DEVICE_DT_GET(DT_ALIAS(codec0));
 
@@ -51,7 +51,7 @@ static void build_sine_table(void)
 static void fill_buffer(uint16_t *buf)
 {
 	for (uint32_t i = 0; i < BLOCK_SAMPLES; i++) {
-		uint8_t idx = (uint8_t)(phase_acc >> 16);
+		uint8_t idx = (uint8_t)(phase_acc >> 24);
 		buf[i] = sine_table[idx];
 		phase_acc += FREQ_STEP_440HZ;
 	}
