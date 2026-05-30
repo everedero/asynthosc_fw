@@ -41,10 +41,17 @@ static volatile uint32_t callback_count;
 /* Sine table: 256 entries, 12-bit amplitude centred at 2048 */
 static uint16_t sine_table[256];
 
+/*
+ * ~160 mV peak on 3.3 V DAC reference — instrument level for Focusrite
+ * Scarlett Hi-Z input.  Full-scale (2047) would be ~1.65 V peak (+3.6 dBu),
+ * roughly 18 dB too hot for a passive guitar jack.
+ */
+#define SINE_AMPLITUDE 200
+
 static void build_sine_table(void)
 {
 	for (int i = 0; i < 256; i++) {
-		sine_table[i] = (uint16_t)(2048.0 + 2047.0 * sin(2.0 * M_PI * i / 256.0));
+		sine_table[i] = (uint16_t)(2048.0 + SINE_AMPLITUDE * sin(2.0 * M_PI * i / 256.0));
 	}
 }
 
