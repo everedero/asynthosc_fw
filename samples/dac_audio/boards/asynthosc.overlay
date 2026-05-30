@@ -1,0 +1,38 @@
+#include <zephyr/dt-bindings/dma/stm32_dma.h>
+
+/ {
+	aliases {
+		codec0 = &dac_audio1;
+	};
+};
+
+/*
+ * Enable the DAC audio node defined in stm32h7.dtsi and wire it to the
+ * board-specific DMA channel and PA4 analog output pin.
+ *
+ * DMA1 stream 1 (cell = 1; STM32H7 DMA offset = 1, so hardware stream 0).
+ * DMAMUX1 request 67 = LL_DMAMUX1_REQ_DAC1_CH1.
+ */
+&dac_audio1 {
+	dmas = <&dma1 1 67
+		(STM32_DMA_PERIPH_TX | STM32_DMA_16BITS | STM32_DMA_PRIORITY_HIGH)
+		0>;
+	dma-names = "tx";
+	pinctrl-0 = <&dac1_out1_pa4>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+/* Enable DMA1 + DMAMUX1 so the STM32 DMA driver is compiled */
+&dma1 {
+	status = "okay";
+};
+
+&dmamux1 {
+	status = "okay";
+};
+
+/* Hand DAC1 hardware to the audio driver; disable the plain DAC driver */
+&dac1 {
+	status = "disabled";
+};
