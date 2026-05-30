@@ -8,11 +8,13 @@ manifest:
   remotes:
     - name: zephyrproject-rtos
       url-base: https://github.com/zephyrproject-rtos
+    - name: eve-fork
+      url-base: https://github.com/everedero
 
   projects:
     - name: zephyr
-      remote: zephyrproject-rtos
-      revision: v4.4.0
+      remote: eve-fork
+      revision: feat/stm32-dac-audio
       import:
         # By using name-allowlist we can clone only the modules that are
         # strictly needed by the application.
